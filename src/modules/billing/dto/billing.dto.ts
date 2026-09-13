@@ -84,6 +84,14 @@ export class RejectBillDto {
   reason: string;
 }
 
+export class UpdateBillStatusDto {
+  @IsIn(['PAID', 'UNPAID', 'GENERATED', 'SENT', 'DRAFT', 'APPROVED', 'REJECTED', 'OVERDUE'], {
+    message: 'Status must be either PAID or UNPAID.',
+  })
+  @IsNotEmpty({ message: 'Status is required.' })
+  status: string;
+}
+
 export class GenerateInvoiceDto {
   @IsOptional()
   @IsUUID('4', { message: 'Invalid School/Institution ID format.' })
@@ -120,10 +128,33 @@ export class UpdatePricingDto {
 }
 
 export class UpdateSchoolPricingDto {
+  @IsOptional()
   @Type(() => Number)
   @IsNumber({}, { message: 'Price per student must be a valid number.' })
   @Min(1, { message: 'Price per student must be at least ₹1.' })
-  pricePerStudent: number;
+  @Max(1000000, { message: 'Price per student cannot exceed ₹10,00,000.' })
+  pricePerStudent?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: 'Price must be a valid number.' })
+  @Min(1, { message: 'Price must be at least ₹1.' })
+  @Max(1000000, { message: 'Price cannot exceed ₹10,00,000.' })
+  price?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt({ message: 'Billing month must be an integer (1 - 12).' })
+  @Min(1)
+  @Max(12)
+  billingMonth?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt({ message: 'Billing year must be an integer.' })
+  @Min(2020)
+  @Max(2100)
+  billingYear?: number;
 
   @IsOptional()
   @IsDateString({}, { message: 'Invalid effective from date format.' })

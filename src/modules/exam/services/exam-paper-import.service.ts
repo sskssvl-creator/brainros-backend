@@ -25,6 +25,7 @@ import { QuestionDifficultyEnum, QuestionTypeEnum } from '@prisma/client';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { ExamImportJobData } from '../processors/exam-import.processor';
+import { AiTranslationService } from '../../ai-translation/services/ai-translation.service';
 
 @Injectable()
 export class ExamPaperImportService {
@@ -35,6 +36,7 @@ export class ExamPaperImportService {
     private readonly prisma: PrismaService,
     private readonly parserService: ExamPaperParserService,
     private readonly validatorService: ExamPaperValidatorService,
+    private readonly aiTranslationService: AiTranslationService,
     @InjectQueue('exam-import-queue') private readonly examImportQueue: Queue,
   ) {
     if (!fs.existsSync(this.storageDir)) {
@@ -325,6 +327,7 @@ export class ExamPaperImportService {
 
     // Execute atomic safe transaction attaching/replacing questions on exam
     const totalRows = validationResult.validatedRows.length;
+    let createdVersionId: string | null = null;
 
     await this.prisma.$transaction(async (tx) => {
       // 1. Resolve default preferred language
@@ -697,7 +700,26 @@ export class ExamPaperImportService {
           completedAt: new Date(),
         },
       });
+      createdVersionId = examVersion.id;
+    }, {
+      maxWait: 60000,
+      timeout: 300000,
     });
+
+    // Automatically trigger shared AI Translation for imported exam version
+    if (createdVersionId) {
+      try {
+        await this.aiTranslationService.startQuestionPaperTranslation(
+          exam.id,
+          createdVersionId,
+          userId,
+        );
+      } catch (err: any) {
+        this.logger.warn(
+          `Could not start automatic AI translation for imported exam ${exam.id}: ${err.message}`,
+        );
+      }
+    }
 
     await progressCallback(
       totalRows,
@@ -1321,6 +1343,9 @@ export class ExamPaperImportService {
       }
 
       return exam;
+    }, {
+      maxWait: 60000,
+      timeout: 300000,
     });
   }
 
@@ -1590,150 +1615,7 @@ export class ExamPaperImportService {
    * GET /admin/exam-manager/blueprints
    */
   async getActiveBlueprints(): Promise<BlueprintItemDto[]> {
-    const dbBlueprints = await this.prisma.examBlueprint.findMany({
-      where: { isActive: true },
-      include: {
-        exam: {
-          select: {
-            id: true,
-            title: true,
-            durationMinutes: true,
-            examTargetId: true,
-            examTarget: { select: { id: true, name: true } },
-          },
-        },
-        rules: {
-          include: {
-            subject: { select: { id: true, name: true } },
-          },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    const results: BlueprintItemDto[] = [];
-    const seenNames = new Set<string>();
-
-    for (const bp of dbBlueprints) {
-      const subjectDist: BlueprintSubjectRule[] = [];
-      if (bp.rules && bp.rules.length > 0) {
-        for (const r of bp.rules) {
-          if (r.subject?.name) {
-            subjectDist.push({
-              subject: r.subject.name,
-              questionCount:
-                r.selectionCount ||
-                Math.round(
-                  (bp.totalQuestions * (r.selectionPercentage || 0)) / 100,
-                ) ||
-                1,
-            });
-          }
-        }
-      }
-
-      const name = bp.name || bp.exam?.title || 'Custom Blueprint';
-      seenNames.add(name.toUpperCase());
-
-      results.push({
-        id: bp.id,
-        name,
-        code: (bp.name || 'BP')
-          .toUpperCase()
-          .replace(/\s+/g, '_')
-          .slice(0, 10),
-        description: `Predefined ${name} blueprint with ${bp.totalQuestions} questions`,
-        totalQuestions: bp.totalQuestions,
-        durationMinutes:
-          bp.exam?.durationMinutes ||
-          (bp.totalQuestions >= 180
-            ? 200
-            : bp.totalQuestions >= 75
-              ? 180
-              : 120),
-        status: 'ACTIVE',
-        subjectDistribution:
-          subjectDist.length > 0
-            ? subjectDist
-            : [
-                {
-                  subject: 'Physics',
-                  questionCount: Math.floor(bp.totalQuestions / 3),
-                },
-                {
-                  subject: 'Chemistry',
-                  questionCount: Math.floor(bp.totalQuestions / 3),
-                },
-                {
-                  subject: 'Biology',
-                  questionCount:
-                    bp.totalQuestions -
-                    2 * Math.floor(bp.totalQuestions / 3),
-                },
-              ],
-        examTargetId: bp.exam?.examTargetId,
-      });
-    }
-
-    // Ensure canonical predefined exam blueprints exist (NEET, JEE Main)
-    const canonicals = [
-      {
-        name: 'NEET',
-        code: 'NEET_UG',
-        totalQuestions: 180,
-        durationMinutes: 200,
-        description:
-          'Standard NTA NEET-UG blueprint (Physics 45, Chemistry 45, Biology 90 = 180 Questions)',
-        subjectDistribution: [
-          { subject: 'Physics', questionCount: 45 },
-          { subject: 'Chemistry', questionCount: 45 },
-          { subject: 'Biology', questionCount: 90 },
-        ],
-      },
-      {
-        name: 'JEE Main',
-        code: 'JEE_MAIN',
-        totalQuestions: 90,
-        durationMinutes: 180,
-        description:
-          'Standard NTA JEE Main blueprint (Physics 30, Chemistry 30, Mathematics 30 = 90 Questions)',
-        subjectDistribution: [
-          { subject: 'Physics', questionCount: 30 },
-          { subject: 'Chemistry', questionCount: 30 },
-          { subject: 'Mathematics', questionCount: 30 },
-        ],
-      },
-    ];
-
-    for (const c of canonicals) {
-      if (
-        !seenNames.has(c.name.toUpperCase()) &&
-        !seenNames.has(c.code.toUpperCase())
-      ) {
-        const target = await this.prisma.examTarget.findFirst({
-          where: {
-            OR: [
-              { name: { contains: c.name, mode: 'insensitive' } },
-              { name: { contains: c.code, mode: 'insensitive' } },
-            ],
-          },
-        });
-
-        results.unshift({
-          id: `canonical_${c.code.toLowerCase()}`,
-          name: c.name,
-          code: c.code,
-          description: c.description,
-          totalQuestions: c.totalQuestions,
-          durationMinutes: c.durationMinutes,
-          status: 'ACTIVE',
-          subjectDistribution: c.subjectDistribution,
-          examTargetId: target?.id,
-        });
-      }
-    }
-
-    return results;
+    return [];
   }
 
   /**
@@ -1802,25 +1684,13 @@ export class ExamPaperImportService {
    */
   async validateQuestionPaperAndTranslations(
     questionFile: { originalname: string; size: number; buffer: Buffer },
-    blueprintId: string,
+    blueprintId?: string,
     translationFiles: Array<{
       file: { originalname: string; size: number; buffer: Buffer };
       languageId: string;
     }> = [],
   ): Promise<ComprehensiveExamValidationResult> {
     this.validateFile(questionFile);
-
-    // 1. Resolve Blueprint rules
-    const allBlueprints = await this.getActiveBlueprints();
-    const blueprint = allBlueprints.find(
-      (b) => b.id === blueprintId || b.code === blueprintId,
-    );
-
-    if (!blueprint) {
-      throw new BadRequestException(
-        `Selected blueprint '${blueprintId}' is invalid or inactive.`,
-      );
-    }
 
     // 2. Parse Question Paper File
     const parsedRows = await this.parserService.parseBuffer(
@@ -1832,69 +1702,8 @@ export class ExamPaperImportService {
     const paperValidation =
       await this.validatorService.validatePaper(parsedRows);
 
-    // 4. Validate Against Selected Blueprint Requirements
-    const subjectCounts: Record<string, number> = {};
-    for (const r of paperValidation.validatedRows) {
-      if (r.isValid) {
-        const sub = (r.data.subject || 'General').trim();
-        let matchedSub = sub;
-        if (/physic/i.test(sub)) matchedSub = 'Physics';
-        else if (/chem/i.test(sub)) matchedSub = 'Chemistry';
-        else if (/math/i.test(sub)) matchedSub = 'Mathematics';
-        else if (/bio|botan|zool/i.test(sub)) matchedSub = 'Biology';
-
-        subjectCounts[matchedSub] = (subjectCounts[matchedSub] || 0) + 1;
-      }
-    }
-
-    const subjectChecks: Array<{
-      subject: string;
-      expectedCount: number;
-      actualCount: number;
-      isMatched: boolean;
-    }> = [];
-
-    let isBlueprintMatched = true;
-
-    for (const rule of blueprint.subjectDistribution) {
-      const actual = subjectCounts[rule.subject] || 0;
-      const isMatched = actual === rule.questionCount;
-      if (!isMatched) isBlueprintMatched = false;
-
-      subjectChecks.push({
-        subject: rule.subject,
-        expectedCount: rule.questionCount,
-        actualCount: actual,
-        isMatched,
-      });
-    }
-
     const errors = [...paperValidation.errors];
     const warnings = [...paperValidation.warnings];
-
-    if (!isBlueprintMatched) {
-      for (const sc of subjectChecks) {
-        if (!sc.isMatched) {
-          const detail =
-            sc.actualCount < sc.expectedCount
-              ? `insufficient questions (${sc.actualCount}/${sc.expectedCount})`
-              : `excess questions (${sc.actualCount}/${sc.expectedCount})`;
-          errors.push({
-            row: 0,
-            column: 'subject_distribution',
-            message: `Blueprint validation failed for ${sc.subject}: Required exactly ${sc.expectedCount} questions, found ${sc.actualCount} (${detail}).`,
-          });
-        }
-      }
-    }
-
-    if (blueprint.totalQuestions && paperValidation.validRows !== blueprint.totalQuestions) {
-      errors.push({
-        row: 0,
-        column: 'total_questions',
-        message: `Blueprint total question count mismatch: Required ${blueprint.totalQuestions} questions, but paper contains ${paperValidation.validRows} valid questions.`,
-      });
-    }
 
     // 5. Validate Simultaneous Translation Files
     const allLanguages = await this.prisma.preferredLanguage.findMany();
@@ -1963,16 +1772,16 @@ export class ExamPaperImportService {
       errors: r.errors,
     }));
 
-    const isValid = paperValidation.isValid && isBlueprintMatched && errors.length === 0;
+    const isValid = paperValidation.isValid && errors.length === 0;
 
     return {
       isValid,
       blueprint: {
-        id: blueprint.id,
-        name: blueprint.name,
-        totalQuestions: blueprint.totalQuestions,
-        isMatched: isBlueprintMatched,
-        subjectChecks,
+        id: 'standard',
+        name: 'Standard Question Paper',
+        totalQuestions: paperValidation.totalQuestions,
+        isMatched: true,
+        subjectChecks: [],
       },
       questionsSummary: {
         totalRows: paperValidation.totalRows,
@@ -1981,8 +1790,8 @@ export class ExamPaperImportService {
         duplicateRows: 0,
         totalQuestions: paperValidation.totalQuestions,
         totalMarks: paperValidation.totalMarks,
-        durationMinutes: paperValidation.durationMinutes || blueprint.durationMinutes,
-        subjectCounts,
+        durationMinutes: paperValidation.durationMinutes || 180,
+        subjectCounts: {},
       },
       translationsSummary,
       previewRows,
@@ -2305,23 +2114,10 @@ export class ExamPaperImportService {
         });
       }
 
-      // 5. Create Blueprint Traceability Record
-      const examBlueprint = await tx.examBlueprint.create({
-        data: {
-          examId: exam.id,
-          name: `${dto.title} - Blueprint`,
-          totalQuestions: paperValidation.totalQuestions,
-          version: 1,
-          isSystem: false,
-          createdById: userId,
-        },
-      });
-
       // 6. Create Immutable ExamVersion Snapshot
       const examVersion = await tx.examVersion.create({
         data: {
           examId: exam.id,
-          blueprintId: examBlueprint.id,
           versionNumber: 1,
           status: 'GENERATED',
           generationSeed: `exam_upload_${Date.now()}`,
@@ -2398,6 +2194,9 @@ export class ExamPaperImportService {
         languagesCount: translationFiles.length + 1,
         createdAt: exam.createdAt,
       };
+    }, {
+      maxWait: 60000,
+      timeout: 300000,
     });
   }
 
@@ -2654,16 +2453,6 @@ export class ExamPaperImportService {
       include: {
         examTarget: true,
         sections: { include: { subject: true }, orderBy: { displayOrder: 'asc' } },
-        blueprints: {
-          include: {
-            rules: {
-              include: {
-                chapter: true,
-                subject: true,
-              },
-            },
-          },
-        },
         schedules: { orderBy: { createdAt: 'desc' }, take: 1 },
       },
     });
@@ -2716,260 +2505,22 @@ export class ExamPaperImportService {
       }
     }
 
-    // Default language resolution
-    const defaultLang =
-      (await this.prisma.preferredLanguage.findFirst({
-        where: { code: { in: ['en', 'EN', 'English'] } },
-      })) ||
-      (await this.prisma.preferredLanguage.findFirst());
-
-    if (!defaultLang) {
-      throw new BadRequestException('Default language not configured in database.');
-    }
-
-    // Sections and chapter mapping
-    let sections = exam.sections;
-    if (sections.length === 0) {
-      const defaultSubject = await this.prisma.subject.findFirst({
-        where: exam.examTargetId ? { examTargetId: exam.examTargetId } : undefined,
-      });
-      if (defaultSubject) {
-        const sec = await this.prisma.examSection.create({
-          data: {
-            examId: exam.id,
-            subjectId: defaultSubject.id,
-            name: `${defaultSubject.name} Section`,
-            totalQuestions: dto.questions.length,
-            displayOrder: 1,
-          },
-          include: { subject: true },
-        });
-        sections = [sec];
-      }
-    }
-
-    const defaultSubjectId = sections[0]?.subjectId || (await this.prisma.subject.findFirst())?.id;
-    if (!defaultSubjectId) {
-      throw new BadRequestException('No valid academic subject found in database.');
-    }
-
-    // Version management
-    const existingVersion = await this.prisma.examVersion.findFirst({
-      where: { examId: exam.id },
-      orderBy: { versionNumber: 'desc' },
-    });
-    const versionNumber = (existingVersion?.versionNumber || 0) + 1;
-
-    const marksPerQ = exam.defaultMarksPerQuestion || 4;
-    const negMarks = exam.defaultNegativeMarks !== undefined ? exam.defaultNegativeMarks : 1;
-
-    // Atomic Database Transaction
-    const result = await this.prisma.$transaction(async (tx) => {
-      // 1. Create new published ExamVersion
-      const version = await tx.examVersion.create({
-        data: {
-          examId: exam.id,
-          versionNumber,
-          status: 'PUBLISHED',
-          totalQuestions: dto.questions.length,
-          durationMinutes: exam.durationMinutes,
-          totalMarks: dto.questions.length * marksPerQ,
-          generatedById: userId,
-          publishedAt: new Date(),
-        },
-      });
-
-      // 2. Clean up previous exam questions if replacing paper
-      await tx.examQuestion.deleteMany({ where: { examId: exam.id } });
-
-      let currentSecIdx = 0;
-      let secQuestionsPlaced = 0;
-
-      for (let idx = 0; idx < dto.questions.length; idx++) {
-        const qDto = dto.questions[idx];
-        const displayOrder = idx + 1;
-
-        // Assign section
-        let assignedSection = sections[currentSecIdx] || sections[0];
-        if (
-          assignedSection &&
-          secQuestionsPlaced >= (assignedSection.totalQuestions || 9999) &&
-          currentSecIdx < sections.length - 1
-        ) {
-          currentSecIdx++;
-          assignedSection = sections[currentSecIdx];
-          secQuestionsPlaced = 0;
-        }
-        secQuestionsPlaced++;
-
-        const subId = qDto.subjectId || assignedSection?.subjectId || defaultSubjectId;
-        const chapId = qDto.chapterId || undefined;
-
-        // Create Question in Question Bank
-        const question = await tx.question.create({
-          data: {
-            subjectId: subId,
-            chapterId: chapId,
-            defaultLanguageId: defaultLang.id,
-            type: QuestionTypeEnum.SINGLE_CORRECT,
-            difficultyLevel: QuestionDifficultyEnum.MEDIUM,
-            marks: qDto.marks !== undefined ? Number(qDto.marks) : marksPerQ,
-            negativeMarks: qDto.negativeMarks !== undefined ? Number(qDto.negativeMarks) : negMarks,
-            createdById: userId,
-            isActive: true,
-          },
-        });
-
-        // Create Options (A, B, C, D)
-        const optDefs = [
-          { key: 'A', text: qDto.optionA.trim() },
-          { key: 'B', text: qDto.optionB.trim() },
-          { key: 'C', text: qDto.optionC.trim() },
-          { key: 'D', text: qDto.optionD.trim() },
-        ];
-
-        const createdOptions: any[] = [];
-        for (let oIdx = 0; oIdx < optDefs.length; oIdx++) {
-          const od = optDefs[oIdx];
-          const isCorrect = qDto.correctAnswer === od.key;
-          const opt = await tx.questionOption.create({
-            data: {
-              questionId: question.id,
-              optionKey: od.key,
-              optionLabel: od.key,
-              optionText: od.text,
-              isCorrect,
-              displayOrder: oIdx + 1,
-            },
-          });
-          createdOptions.push(opt);
-        }
-
-        // Create Default Translation
-        await tx.questionTranslation.create({
-          data: {
-            questionId: question.id,
-            languageId: defaultLang.id,
-            questionText: qDto.questionText.trim(),
-            explanation: qDto.explanation?.trim() || null,
-          },
-        });
-
-        // Link Question to Exam
-        if (assignedSection) {
-          await tx.examQuestion.create({
-            data: {
-              examId: exam.id,
-              sectionId: assignedSection.id,
-              questionId: question.id,
-              displayOrder,
-              marks: qDto.marks !== undefined ? Number(qDto.marks) : marksPerQ,
-              negativeMarks: qDto.negativeMarks !== undefined ? Number(qDto.negativeMarks) : negMarks,
-            },
-          });
-        }
-
-        // Create ExamVersion Question Snapshot
-        const vQuestion = await tx.examVersionQuestion.create({
-          data: {
-            examVersionId: version.id,
-            sourceQuestionId: question.id,
-            sourceQuestionVersion: 1,
-            sequenceNumber: displayOrder,
-            sectionName: assignedSection?.name || 'Main Section',
-            subjectName: assignedSection?.subject?.name || 'General',
-            type: QuestionTypeEnum.SINGLE_CORRECT,
-            difficultyLevel: QuestionDifficultyEnum.MEDIUM,
-            marks: qDto.marks !== undefined ? Number(qDto.marks) : marksPerQ,
-            negativeMarks: qDto.negativeMarks !== undefined ? Number(qDto.negativeMarks) : negMarks,
-            questionText: qDto.questionText.trim(),
-            explanation: qDto.explanation?.trim() || null,
-            correctAnswer: { key: qDto.correctAnswer },
-          },
-        });
-
-        // Create ExamVersion Options Snapshot
-        for (let oIdx = 0; oIdx < createdOptions.length; oIdx++) {
-          const opt = createdOptions[oIdx];
-          await tx.examVersionOption.create({
-            data: {
-              examVersionQuestionId: vQuestion.id,
-              sourceOptionId: opt.id,
-              displayOrder: opt.displayOrder,
-              optionKey: opt.optionKey,
-              optionLabel: opt.optionLabel,
-              optionText: opt.optionText,
-              isCorrect: opt.isCorrect,
-            },
-          });
-        }
-
-        // Create ExamVersion Translation Snapshot
-        await tx.examVersionTranslation.create({
-          data: {
-            examVersionQuestionId: vQuestion.id,
-            languageId: defaultLang.id,
-            languageCode: defaultLang.code || 'en',
-            questionText: qDto.questionText.trim(),
-            explanation: qDto.explanation?.trim() || null,
-          },
-        });
-      }
-
-      // 3. Update ExamSchedule & AnswerKey state
-      const schedule = await tx.examSchedule.findFirst({
-        where: { examId: exam.id },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      if (schedule) {
-        await tx.examSchedule.update({
-          where: { id: schedule.id },
-          data: {
-            examVersionId: version.id,
-            hasAnswerKey: true,
-            answerKeyUploadedAt: new Date(),
-            answerKeyUploadedById: userId,
-          },
-        });
-      }
-
-      // 4. Audit Log
-      await tx.auditLog.create({
-        data: {
-          actorUserId: userId,
-          action: 'QUESTION_PAPER_MANUAL_ENTRY',
-          entityType: 'EXAM_VERSION',
-          entityId: version.id,
-          beforeState: { previousVersion: existingVersion?.id || null },
-          afterState: {
-            examId: exam.id,
-            versionId: version.id,
-            totalQuestions: dto.questions.length,
-          },
-          metadata: {
-            examId: exam.id,
-            examTitle: exam.title,
-            questionCount: dto.questions.length,
-            versionNumber,
-            enteredBy: userId,
-            timestamp: new Date().toISOString(),
-          },
-        },
-      });
-
-      return {
-        examId: exam.id,
-        examVersionId: version.id,
-        versionNumber,
-        questionsCount: dto.questions.length,
-      };
-    });
+    // Delegate database saving and AI translation to BullMQ background processor for instant UI redirect
+    const queuedJob = await this.aiTranslationService.queueManualQuestionsTranslation(
+      exam.id,
+      dto,
+      userId,
+    );
 
     return {
       success: true,
-      message: `Successfully saved ${dto.questions.length} questions for ${exam.title}.`,
-      data: result,
+      message: `Question paper submitted! Redirecting to AI Translation processing...`,
+      data: {
+        examId: exam.id,
+        translationJobId: queuedJob.jobId,
+        questionsCount: dto.questions.length,
+        totalLanguages: queuedJob.totalLanguages,
+      },
     };
   }
 }

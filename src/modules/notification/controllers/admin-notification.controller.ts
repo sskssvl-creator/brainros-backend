@@ -117,43 +117,7 @@ export class AdminNotificationController {
       }
     }
 
-    // 2. Fetch completed exams that are missing answer keys
-    const completedSchedules = await this.prisma.examSchedule.findMany({
-      where: {
-        hasAnswerKey: false,
-        OR: [
-          { status: 'ENDED' },
-          { endTime: { lte: now } },
-        ],
-      },
-      include: {
-        exam: true,
-      },
-      orderBy: { endTime: 'desc' },
-      take: 20,
-    });
-
-    let akCount = 0;
-    for (const cs of completedSchedules) {
-      if (!cs.exam) continue;
-      akCount++;
-      alerts.push({
-        id: `ak-${cs.id}`,
-        category: 'ANSWER_KEY',
-        type: 'ANSWER_KEY_PENDING',
-        title: `Exam "${cs.exam.title}" completed - Please upload answer key`,
-        message: `Exam window ended at ${new Date(cs.endTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} on ${new Date(cs.endTime).toLocaleDateString()}. Upload the answer key to trigger automated evaluation and rank generation.`,
-        priority: 'HIGH',
-        link: `/super-admin/exam-manager/answer-key/${cs.id}`,
-        actionText: 'Upload Answer Key',
-        scheduleId: cs.id,
-        examId: cs.examId,
-        endTime: cs.endTime ? new Date(cs.endTime).toISOString() : undefined,
-        createdAt: cs.endTime ? new Date(cs.endTime).toISOString() : new Date().toISOString(),
-      });
-    }
-
-    // 3. Fetch pending approval requests
+    // 2. Fetch pending approval requests
     const pendingApprovals = await this.prisma.approvalRequest.findMany({
       where: {
         status: 'PENDING',
@@ -192,7 +156,7 @@ export class AdminNotificationController {
       summary: {
         total: alerts.length,
         questionPapersPending: qpCount,
-        answerKeysPending: akCount,
+        answerKeysPending: 0,
         approvalsPending: appCount,
       },
     };

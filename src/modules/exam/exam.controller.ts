@@ -16,7 +16,6 @@ import {
   GenerateExamQuestionsDto,
   AddExamQuestionsDto,
   ExamFilterDto,
-  CreateExamFromTemplateDto,
 } from './dto/exam.dto';
 import {
   ValidateExamGenerationFiltersDto,
@@ -75,12 +74,6 @@ export class ExamController {
   @Roles('ADMIN', 'SUPER_ADMIN', 'GENERAL_MANAGER')
   createExam(@Body() dto: CreateExamDto, @CurrentUser() user: any) {
     return this.examService.createExam(dto, user.userId);
-  }
-
-  @Post('create-from-template')
-  @Roles('ADMIN', 'SUPER_ADMIN', 'GENERAL_MANAGER')
-  createExamFromTemplate(@Body() dto: CreateExamFromTemplateDto, @CurrentUser() user: any) {
-    return this.examService.createExamFromTemplate(dto, user.userId);
   }
 
   @Post('generate-questions')

@@ -14,6 +14,7 @@ import { AuditLogService } from '../audit/services/audit-log.service';
 import { ResultService } from '../../result/result.service';
 import { NotificationChannel, NotificationStatus, NotificationType } from '@prisma/client';
 import { ExamReportEmailProcessor } from '../processors/exam-report-email.processor';
+import { JobProgressService } from '../../job-progress/services/job-progress.service';
 
 export interface CompletedExamQueryDto {
   search?: string;
@@ -32,6 +33,7 @@ export class CompletedExamReportsService {
     private readonly prisma: PrismaService,
     private readonly auditLogService: AuditLogService,
     private readonly resultService: ResultService,
+    private readonly jobProgressService: JobProgressService,
     @InjectQueue('exam-report-email')
     private readonly emailReportQueue: Queue,
     @Optional()
@@ -899,4 +901,236 @@ export class CompletedExamReportsService {
       recipient: notification.recipientAddress,
     };
   }
+
+  /**
+   * Dispatches PDF reports for ALL evaluated student attendees for a given Live Exam.
+   * Tracks real-time batch progress via JobProgressService / WebSocket.
+   */
+  async sendAllReportEmails(examId: string, adminUser: any) {
+    const exam = await this.prisma.exam.findUnique({
+      where: { id: examId },
+      include: {
+        status: true,
+      },
+    });
+
+    if (!exam) {
+      throw new NotFoundException(`Exam with ID '${examId}' not found.`);
+    }
+
+    if (!this.isLiveExamTitle(exam.title)) {
+      throw new BadRequestException('The requested exam is a Mock Test, which is not permitted in this dashboard.');
+    }
+
+    // Find all evaluated attempts for this exam with valid student emails
+    const attempts = await this.prisma.attempt.findMany({
+      where: {
+        examId,
+        result: {
+          isNot: null,
+        },
+      },
+      include: {
+        student: {
+          include: {
+            user: { select: { id: true, email: true, phone: true } },
+          },
+        },
+        result: true,
+      },
+      orderBy: { submittedAt: 'asc' },
+    });
+
+    const eligibleAttempts = attempts.filter((att) => {
+      const email = att.student?.user?.email;
+      return email && email.includes('@');
+    });
+
+    if (eligibleAttempts.length === 0) {
+      throw new BadRequestException(
+        'No evaluated attendees with valid registered email addresses found for this exam.',
+      );
+    }
+
+    const totalCount = eligibleAttempts.length;
+    const adminId = adminUser?.userId || adminUser?.id || null;
+    const batchJobId = `bulk_report_email_${examId}_${Date.now()}`;
+
+    // Publish start of bulk dispatch job
+    await this.jobProgressService.publishStarted(
+      'bulk-exam-report-email',
+      batchJobId,
+      {
+        type: 'BULK_REPORT_EMAIL_DISPATCH',
+        stage: 'QUEUEING_REPORTS',
+        examId,
+        userId: adminId,
+        totalRecords: totalCount,
+        message: `Starting bulk email dispatch for ${totalCount} attendees...`,
+      },
+    );
+
+    this.logger.log(
+      `[CompletedExamReportsService] Initiating bulk report email batch '${batchJobId}' for exam '${examId}' (${totalCount} candidates)`,
+    );
+
+    // Asynchronously queue individual jobs to keep the HTTP response instant while updating WebSocket progress
+    setImmediate(async () => {
+      let queuedCount = 0;
+      const processor = this.moduleRef?.get(ExamReportEmailProcessor, { strict: false });
+
+      for (let i = 0; i < eligibleAttempts.length; i++) {
+        const attempt = eligibleAttempts[i];
+        const rawEmail = attempt.student?.user?.email;
+        if (!rawEmail) continue;
+        const recipientEmail = rawEmail.trim();
+
+        try {
+          // Upsert ExamAnalysisReport status
+          await this.prisma.examAnalysisReport.upsert({
+            where: { attemptId: attempt.id },
+            create: {
+              examId: attempt.examId,
+              examVersionId: attempt.examVersionId,
+              attemptId: attempt.id,
+              studentId: attempt.studentId,
+              status: 'EMAIL_QUEUED',
+              emailStatus: 'QUEUED',
+            },
+            update: {
+              status: 'EMAIL_QUEUED',
+              emailStatus: 'QUEUED',
+            },
+          });
+
+          // Create Notification
+          const idempotencyKey = `report-email:${examId}:${attempt.id}:${Date.now()}`;
+          const notification = await this.prisma.notification.create({
+            data: {
+              userId: attempt.student.userId,
+              recipientUserId: attempt.student.userId,
+              recipientAddress: recipientEmail,
+              channel: NotificationChannel.EMAIL,
+              type: NotificationType.REPORT_READY,
+              title: `Brainros Exam Report - ${exam.title}`,
+              message: `Your performance report for ${exam.title} is attached.`,
+              status: NotificationStatus.PENDING,
+              correlationId: attempt.id,
+              idempotencyKey,
+              data: {
+                examId,
+                attemptId: attempt.id,
+                studentId: attempt.studentId,
+                requestedByAdminId: adminId,
+                batchJobId,
+              },
+            },
+          });
+
+          // Add to BullMQ queue or fallback
+          let singleJobId = `report_email_${attempt.id}_${Date.now()}`;
+          try {
+            const job = await this.emailReportQueue.add(
+              'send-student-report-email',
+              {
+                notificationId: notification.id,
+                examId,
+                attemptId: attempt.id,
+                studentId: attempt.studentId,
+                recipientEmail,
+                requestedByAdminId: adminId,
+                reportType: 'EXAM_ANALYSIS',
+              },
+              {
+                attempts: 3,
+                backoff: { type: 'exponential', delay: 3000 },
+                removeOnComplete: 100,
+                removeOnFail: 200,
+              },
+            );
+            if (job?.id) singleJobId = job.id;
+          } catch {
+            // Queue fallback
+            if (processor) {
+              processor.process({
+                id: singleJobId,
+                name: 'send-student-report-email',
+                data: {
+                  notificationId: notification.id,
+                  examId,
+                  attemptId: attempt.id,
+                  studentId: attempt.studentId,
+                  recipientEmail,
+                  requestedByAdminId: adminId,
+                  reportType: 'EXAM_ANALYSIS',
+                },
+              } as any).catch((e: any) =>
+                this.logger.warn(`Bulk fallback dispatch error: ${e?.message}`)
+              );
+            }
+          }
+
+          queuedCount++;
+        } catch (itemErr: any) {
+          this.logger.error(
+            `[CompletedExamReportsService] Failed to queue report for attempt ${attempt.id}: ${itemErr.message}`,
+          );
+        }
+
+        // Emit incremental progress over WebSocket
+        const currentProgress = i + 1;
+        await this.jobProgressService.publishProgress(
+          'bulk-exam-report-email',
+          batchJobId,
+          {
+            current: currentProgress,
+            total: totalCount,
+            percentage: Math.round((currentProgress / totalCount) * 100),
+            stage: 'ENQUEUED',
+            examId,
+            userId: adminId,
+            message: `Queued ${currentProgress} of ${totalCount} attendee reports...`,
+          },
+        );
+      }
+
+      // Final complete notification
+      await this.jobProgressService.publishCompleted(
+        'bulk-exam-report-email',
+        batchJobId,
+        {
+          message: `Successfully queued ${queuedCount} of ${totalCount} student report emails.`,
+          totalProcessed: queuedCount,
+          examId,
+          userId: adminId,
+          resultSummary: {
+            totalEligible: totalCount,
+            queuedSuccessfully: queuedCount,
+          },
+        },
+      );
+    });
+
+    // Audit Log
+    await this.auditLogService.logAction({
+      actorUserId: adminId,
+      action: 'BULK_EXAM_REPORT_EMAILS_REQUESTED',
+      entityType: 'Exam',
+      entityId: examId,
+      metadata: {
+        examId,
+        batchJobId,
+        totalEligibleAttendees: totalCount,
+      },
+    });
+
+    return {
+      success: true,
+      jobId: batchJobId,
+      queue: 'bulk-exam-report-email',
+      totalAttendees: totalCount,
+      message: `Bulk report email dispatch initiated for ${totalCount} attendees.`,
+    };
+  }
 }
+

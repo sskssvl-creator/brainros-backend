@@ -211,7 +211,6 @@ model User {
   performedReviews   QuestionReviewHistory[]
   createdExams       Exam[]                  @relation("ExamCreatedBy")
   approvedExams      Exam[]                  @relation("ExamApprovedBy")
-  createdBlueprints  ExamBlueprint[]
   generatedVersions  ExamVersion[]
   createdSchedules   ExamSchedule[]          @relation("ScheduleCreatedBy")
   activatedSchedules ExamSchedule[]          @relation("ScheduleActivatedBy")
@@ -569,7 +568,6 @@ model Subject {
   questions     Question[]
   examSections  ExamSection[]
   subjectResults SubjectResult[]
-  blueprintRules BlueprintRule[]
 
   @@unique([examTargetId, name])
   @@index([examTargetId])
@@ -590,7 +588,6 @@ model Chapter {
   topics         Topic[]
   questions      Question[]
   chapterResults ChapterResult[]
-  blueprintRules BlueprintRule[]
 
   @@unique([subjectId, name])
   @@index([subjectId])
@@ -608,7 +605,6 @@ model Topic {
   chapter      Chapter    @relation(fields: [chapterId], references: [id], onDelete: Cascade)
   subTopics    SubTopic[]
   questions    Question[]
-  blueprintRules BlueprintRule[]
 
   @@unique([chapterId, name])
   @@index([chapterId])
@@ -625,7 +621,6 @@ model SubTopic {
   updatedAt    DateTime   @updatedAt @map("updated_at")
   topic        Topic      @relation(fields: [topicId], references: [id], onDelete: Cascade)
   questions    Question[]
-  blueprintRules BlueprintRule[]
 
   @@unique([topicId, name])
   @@index([topicId])
@@ -877,7 +872,6 @@ model Exam {
   scoringRules               ExamScoringRule[]
   attempts                   Attempt[]
   languages                  ExamLanguage[]
-  blueprints                 ExamBlueprint[]
   versions                   ExamVersion[]
   schedules                  ExamSchedule[]
   lifecycleHistories         ExamLifecycleHistory[]
@@ -1446,64 +1440,11 @@ model ChapterResult {
   @@map("chapter_results")
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// EXAM BLUEPRINTS & IMMUTABLE GENERATED VERSIONS (SNAPSHOTS)
-// ═══════════════════════════════════════════════════════════════════
 
-model ExamBlueprint {
-  id                String          @id @default(uuid()) @db.Uuid
-  examId            String          @map("exam_id") @db.Uuid
-  name              String
-  totalQuestions    Int             @map("total_questions")
-  version           Int             @default(1)
-  isActive          Boolean         @default(true) @map("is_active")
-  isSystem          Boolean         @default(false) @map("is_system")
-  createdById       String          @map("created_by_id") @db.Uuid
-  createdAt         DateTime        @default(now()) @map("created_at")
-  updatedAt         DateTime        @updatedAt @map("updated_at")
-
-  exam              Exam            @relation(fields: [examId], references: [id], onDelete: Cascade)
-  createdBy         User            @relation(fields: [createdById], references: [id])
-  rules             BlueprintRule[]
-  generatedVersions ExamVersion[]
-
-  @@index([examId])
-  @@map("exam_blueprints")
-}
-
-model BlueprintRule {
-  id                  String                  @id @default(uuid()) @db.Uuid
-  blueprintId         String                  @map("blueprint_id") @db.Uuid
-  subjectId           String?                 @map("subject_id") @db.Uuid
-  chapterId           String?                 @map("chapter_id") @db.Uuid
-  topicId             String?                 @map("topic_id") @db.Uuid
-  subTopicId          String?                 @map("sub_topic_id") @db.Uuid
-  difficultyLevel     QuestionDifficultyEnum? @map("difficulty_level")
-  type                QuestionTypeEnum?
-  selectionCount      Int?                    @map("selection_count")
-  selectionPercentage Float?                  @map("selection_percentage")
-  priority            Int                     @default(0)
-  createdAt           DateTime                @default(now()) @map("created_at")
-  updatedAt           DateTime                @updatedAt @map("updated_at")
-
-  blueprint           ExamBlueprint           @relation(fields: [blueprintId], references: [id], onDelete: Cascade)
-  subject             Subject?                @relation(fields: [subjectId], references: [id])
-  chapter             Chapter?                @relation(fields: [chapterId], references: [id])
-  topic               Topic?                  @relation(fields: [topicId], references: [id])
-  subTopic            SubTopic?               @relation(fields: [subTopicId], references: [id])
-
-  @@index([blueprintId])
-  @@index([subjectId])
-  @@index([chapterId])
-  @@index([topicId])
-  @@index([subTopicId])
-  @@map("blueprint_rules")
-}
 
 model ExamVersion {
   id                    String              @id @default(uuid()) @db.Uuid
   examId                String              @map("exam_id") @db.Uuid
-  blueprintId           String?             @map("blueprint_id") @db.Uuid
   versionNumber         Int                 @map("version_number")
   status                ExamVersionStatus   @default(GENERATED)
   generationSeed        String?             @map("generation_seed")
@@ -1519,7 +1460,6 @@ model ExamVersion {
   updatedAt             DateTime            @updatedAt @map("updated_at")
 
   exam                  Exam                @relation(fields: [examId], references: [id], onDelete: Cascade)
-  blueprint             ExamBlueprint?      @relation(fields: [blueprintId], references: [id])
   generatedBy           User                @relation(fields: [generatedById], references: [id])
   questions             ExamVersionQuestion[]
   schedules             ExamSchedule[]

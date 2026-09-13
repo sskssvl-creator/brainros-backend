@@ -14,9 +14,7 @@ import { NotificationModule } from './modules/notification/notification.module';
 import { InstitutionModule } from './modules/institution/institution.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { AcademicModule } from './modules/academic/academic.module';
-import { QuestionBankModule } from './modules/question-bank/question-bank.module';
 import { ExamModule } from './modules/exam/exam.module';
-import { ExamGeneratorModule } from './modules/exam-generator/exam-generator.module';
 import { ExamSchedulingModule } from './modules/exam-scheduling/exam-scheduling.module';
 import { ExamAttemptModule } from './modules/exam-attempt/exam-attempt.module';
 import { TimeAnalysisModule } from './modules/time-analysis/time-analysis.module';
@@ -125,9 +123,7 @@ import { AiTranslationModule } from './modules/ai-translation/ai-translation.mod
     InstitutionModule,
     AdminModule,
     AcademicModule,
-    QuestionBankModule,
     ExamModule,
-    ExamGeneratorModule,
     ExamSchedulingModule,
     ExamAttemptModule,
     ExamSecurityModule,

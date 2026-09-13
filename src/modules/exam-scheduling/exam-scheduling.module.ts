@@ -13,7 +13,6 @@ import { WHATSAPP_REMINDER_QUEUE_NAME } from '../notification/interfaces/exam-no
 import { ExamLifecycleService } from './services/exam-lifecycle.service';
 import { ExamScheduleService } from './services/exam-schedule.service';
 import { ExamAccessService } from './services/exam-access.service';
-import { AnswerKeyService } from './services/answer-key.service';
 
 // New Calendar & Activation Services
 import { ExamCycleService } from './services/exam-cycle.service';
@@ -26,7 +25,6 @@ import { ExamSchedulingController } from './controllers/exam-scheduling.controll
 import { ExamCycleController } from './controllers/exam-cycle.controller';
 import { ExamCalendarController } from './controllers/exam-calendar.controller';
 import { FeatureActivationController } from './controllers/feature-activation.controller';
-import { AnswerKeyController } from './controllers/answer-key.controller';
 import { ExamCacheModule } from '../exam-cache/exam-cache.module';
 
 @Module({
@@ -47,13 +45,11 @@ import { ExamCacheModule } from '../exam-cache/exam-cache.module';
     ExamCycleController,
     ExamCalendarController,
     FeatureActivationController,
-    AnswerKeyController,
   ],
   providers: [
     ExamLifecycleService,
     ExamScheduleService,
     ExamAccessService,
-    AnswerKeyService,
     ExamCycleService,
     ExamCalendarService,
     ScheduleReminderService,
@@ -63,7 +59,6 @@ import { ExamCacheModule } from '../exam-cache/exam-cache.module';
     ExamLifecycleService,
     ExamScheduleService,
     ExamAccessService,
-    AnswerKeyService,
     ExamCycleService,
     ExamCalendarService,
     ScheduleReminderService,

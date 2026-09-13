@@ -13,8 +13,9 @@ import { LanguageTranslationProgress } from '../dto/ai-translation-upload.dto';
 export interface AiTranslationParentJobData {
   jobId: string;
   examId: string;
-  examVersionId: string;
+  examVersionId?: string;
   userId: string;
+  manualQuestionsPayload?: any;
 }
 
 @Processor(AI_TRANSLATION_QUEUE, {
@@ -158,6 +159,8 @@ export class AiTranslationParentProcessor extends WorkerHost {
         },
       });
 
+      const resolvedVersionId = job.data.examVersionId || translationJob.examVersionId || '';
+
       // 4. Dispatch BullMQ job for each language
       for (const lang of targetLanguages) {
         await this.languageQueue.add(
@@ -165,7 +168,7 @@ export class AiTranslationParentProcessor extends WorkerHost {
           {
             jobId,
             examId,
-            examVersionId,
+            examVersionId: resolvedVersionId,
             languageId: lang.id,
             languageName: lang.name,
             languageCode: lang.code,

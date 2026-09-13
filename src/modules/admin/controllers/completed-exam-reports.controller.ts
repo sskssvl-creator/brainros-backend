@@ -216,26 +216,27 @@ export class CompletedExamReportsController {
   }
 
   /**
-   * Track email delivery status.
-   * GET /admin/completed-exams/:examId/attempts/:attemptId/email-status
-   * GET /super-admin/completed-exams/:examId/attempts/:attemptId/email-status
+   * Queue PDF report generation and email delivery for all evaluated student attendees via BullMQ.
+   * POST /admin/completed-exams/:examId/send-all-reports
+   * POST /super-admin/completed-exams/:examId/send-all-reports
    */
-  @Get([
-    'admin/completed-exams/:examId/attempts/:attemptId/email-status',
-    'super-admin/completed-exams/:examId/attempts/:attemptId/email-status',
+  @Post([
+    'admin/completed-exams/:examId/send-all-reports',
+    'super-admin/completed-exams/:examId/send-all-reports',
   ])
-  async getReportEmailStatus(
+  async sendAllReportEmails(
     @Param('examId') examId: string,
-    @Param('attemptId') attemptId: string,
+    @CurrentUser() user: any,
   ) {
-    const data = await this.reportsService.getReportEmailStatus(
+    const data = await this.reportsService.sendAllReportEmails(
       examId,
-      attemptId,
+      user,
     );
     return {
-      statusCode: HttpStatus.OK,
-      message: 'Email status retrieved successfully',
+      statusCode: HttpStatus.ACCEPTED,
+      message: 'Bulk student report emails queued successfully',
       data,
     };
   }
 }
+

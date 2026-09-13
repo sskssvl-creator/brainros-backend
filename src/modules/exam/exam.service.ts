@@ -5,15 +5,12 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { InjectQueue } from '@nestjs/bullmq';
-import { Queue } from 'bullmq';
 import {
   CreateExamDto,
   UpdateExamDto,
   GenerateExamQuestionsDto,
   AddExamQuestionsDto,
   ExamFilterDto,
-  CreateExamFromTemplateDto,
 } from './dto/exam.dto';
 import {
   ValidateExamGenerationFiltersDto,
@@ -52,72 +49,7 @@ function shuffleArraySeed<T>(array: T[], seedStr: string): T[] {
 export class ExamService {
   constructor(
     private readonly prisma: PrismaService,
-    @InjectQueue('exam-generation') private readonly examGenerationQueue: Queue,
   ) {}
-
-  /**
-   * Create a new exam automatically generated from the predefined target template in background
-   */
-  async createExamFromTemplate(dto: CreateExamFromTemplateDto, createdById: string) {
-    const blueprint = await this.prisma.examBlueprint.findFirst({
-      where: {
-        isSystem: true,
-        exam: { examTargetId: dto.examTargetId },
-      },
-    });
-
-    if (!blueprint) {
-      throw new BadRequestException(
-        'No predefined system blueprint found for this exam target type. Seeding might be incomplete.',
-      );
-    }
-
-    const generatingStatus = await this.prisma.examStatus.findUnique({
-      where: { name: 'GENERATING' },
-    });
-    if (!generatingStatus) {
-      throw new BadRequestException('Exam status GENERATING not found. Run seeds.');
-    }
-
-    // Default duration & marks per template specifications
-    let duration = 120;
-    let totalMarks = blueprint.totalQuestions * 4;
-    if (blueprint.totalQuestions === 75) {
-      duration = 180; // JEE
-      totalMarks = 300;
-    } else if (blueprint.totalQuestions === 180 || blueprint.totalQuestions === 200) {
-      duration = 200; // NEET
-      totalMarks = 720; // NEET-UG total marks is 720 (180 questions x 4 marks)
-    }
-
-    const exam = await this.prisma.exam.create({
-      data: {
-        examTargetId: dto.examTargetId,
-        title: dto.title,
-        description: dto.description || `Generated from ${blueprint.name}`,
-        totalQuestions: blueprint.totalQuestions,
-        totalMarks,
-        durationMinutes: duration,
-        defaultMarksPerQuestion: 4,
-        defaultNegativeMarks: 1,
-        statusId: generatingStatus.id,
-        createdById,
-      },
-    });
-
-    const job = await this.examGenerationQueue.add('generate', {
-      examId: exam.id,
-      blueprintId: blueprint.id,
-      createdById,
-    });
-
-    return {
-      success: true,
-      message: 'Exam generation started in the background.',
-      examId: exam.id,
-      jobId: job.id,
-    };
-  }
 
   /**
    * Create a new exam with sections (starts in DRAFT status)
@@ -780,19 +712,6 @@ export class ExamService {
           where: { examVersionId: { in: versionIds } },
         });
         await tx.examVersion.deleteMany({ where: { examId: id } });
-      }
-
-      // 3. Delete blueprint rules & blueprints
-      const blueprints = await tx.examBlueprint.findMany({
-        where: { examId: id },
-        select: { id: true },
-      });
-      const blueprintIds = blueprints.map((b) => b.id);
-      if (blueprintIds.length > 0) {
-        await tx.blueprintRule.deleteMany({
-          where: { blueprintId: { in: blueprintIds } },
-        });
-        await tx.examBlueprint.deleteMany({ where: { examId: id } });
       }
 
       // 4. Delete questions, sections, schedules
@@ -1531,23 +1450,10 @@ export class ExamService {
         }
       }
 
-      // 3.3 Create Blueprint metadata for auditability
-      const blueprint = await tx.examBlueprint.create({
-        data: {
-          examId: exam.id,
-          name: `${dto.title} - Auto Filter Blueprint`,
-          totalQuestions: preview.totalQuestions,
-          version: 1,
-          isSystem: false,
-          createdById,
-        },
-      });
-
       // 3.4 Create Immutable ExamVersion snapshot for zero-drift guarantee
       const examVersion = await tx.examVersion.create({
         data: {
           examId: exam.id,
-          blueprintId: blueprint.id,
           versionNumber: 1,
           status: dto.publishImmediately ? 'PUBLISHED' : 'GENERATED',
           generationSeed: preview.generationSeed,
@@ -1838,23 +1744,10 @@ export class ExamService {
         });
       }
 
-      // Create Blueprint record for traceability
-      const blueprint = await tx.examBlueprint.create({
-        data: {
-          examId: exam.id,
-          name: `${dto.title} - File Import Blueprint`,
-          totalQuestions: orderedQuestions.length,
-          version: 1,
-          isSystem: false,
-          createdById: userId,
-        },
-      });
-
       // Create Immutable ExamVersion snapshot
       const examVersion = await tx.examVersion.create({
         data: {
           examId: exam.id,
-          blueprintId: blueprint.id,
           versionNumber: 1,
           status: dto.publishImmediately !== false ? 'PUBLISHED' : 'GENERATED',
           generationSeed: `import_${importId}`,

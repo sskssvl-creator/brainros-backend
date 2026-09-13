@@ -145,22 +145,7 @@ export class ExamScheduleService {
       }
     } else {
       // FULL_EXAM (JEE / NEET / CET)
-      if (dto.blueprintId) {
-        const bp = await this.prisma.examBlueprint.findUnique({
-          where: { id: dto.blueprintId },
-          include: { exam: true },
-        });
-        const targetId = bp?.exam?.examTargetId || resolvedTargetId;
-        if (targetId) {
-          availableCount = await this.prisma.question.count({
-            where: {
-              subject: { examTargetId: targetId },
-              status: 'APPROVED',
-              isActive: true,
-            },
-          });
-        }
-      } else if (resolvedTargetId) {
+      if (resolvedTargetId) {
         availableCount = await this.prisma.question.count({
           where: {
             subject: { examTargetId: resolvedTargetId },
@@ -511,10 +496,8 @@ export class ExamScheduleService {
     let durationMinutes = Number(dto.duration || dto.durationMinutes || 180);
     let totalQuestions = Number(dto.questionCount || dto.totalQuestions || 100);
     let examTargetId = dto.examTargetId;
-    let blueprintId = dto.blueprintId;
 
     let targetName = dto.examTargetName || 'General';
-    let blueprintObj: any = null;
 
     const examTypeUpper = (dto.examType || '').toUpperCase();
 
@@ -675,44 +658,20 @@ export class ExamScheduleService {
       }
     } else {
       // FULL_EXAM — JEE / NEET / CET (or legacy types)
-      const configMode = (dto.configurationMode || 'MANUAL').toUpperCase();
-
-      if (configMode === 'BLUEPRINT' && blueprintId) {
-        blueprintObj = await this.prisma.examBlueprint.findUnique({
-          where: { id: blueprintId },
-          include: {
-            rules: true,
-            exam: { include: { examTarget: true } },
+      if (!examTargetId) {
+        const targetSearch = dto.examTargetName || (examTypeUpper === 'FULL_EXAM' ? 'NEET' : examTypeUpper);
+        const matchedTarget = await this.prisma.examTarget.findFirst({
+          where: {
+            name: { contains: targetSearch === 'JEE_NEET_CET' ? 'NEET' : targetSearch, mode: 'insensitive' },
           },
         });
-
-        if (!blueprintObj) {
-          throw new NotFoundException(`Blueprint with ID '${blueprintId}' not found.`);
+        if (matchedTarget) {
+          examTargetId = matchedTarget.id;
+          targetName = matchedTarget.name;
         }
-
-        totalQuestions = blueprintObj.totalQuestions || totalQuestions;
-        durationMinutes = blueprintObj.exam?.durationMinutes || durationMinutes;
-        examTargetId = blueprintObj.exam?.examTargetId || examTargetId;
-        if (!title) {
-          title = `${blueprintObj.name} (${targetName})`;
-        }
-      } else {
-        // MANUAL mode (or fallback)
-        if (!examTargetId) {
-          const targetSearch = dto.examTargetName || (examTypeUpper === 'FULL_EXAM' ? 'NEET' : examTypeUpper);
-          const matchedTarget = await this.prisma.examTarget.findFirst({
-            where: {
-              name: { contains: targetSearch === 'JEE_NEET_CET' ? 'NEET' : targetSearch, mode: 'insensitive' },
-            },
-          });
-          if (matchedTarget) {
-            examTargetId = matchedTarget.id;
-            targetName = matchedTarget.name;
-          }
-        }
-        if (!title) {
-          title = `${targetName} Full Exam`;
-        }
+      }
+      if (!title) {
+        title = `${targetName} Full Exam`;
       }
 
       if (totalQuestions <= 0) {
@@ -761,7 +720,7 @@ export class ExamScheduleService {
         // Edit existing exam
         exam = await tx.exam.findUnique({
           where: { id: dto.examId },
-          include: { sections: true, blueprints: true, schedules: true },
+          include: { sections: true, schedules: true },
         });
         if (!exam) {
           throw new NotFoundException(`Exam with ID '${dto.examId}' not found.`);
@@ -863,32 +822,6 @@ export class ExamScheduleService {
             },
           });
         }
-
-        // Create blueprint rules for chapters
-        const bp = await tx.examBlueprint.create({
-          data: {
-            examId: exam.id,
-            name: `${title} Blueprint`,
-            totalQuestions: Number(totalQuestions),
-            createdById: scheduledById,
-          },
-        });
-
-        const totalChs = resolvedSubjectGroups.reduce((acc, g) => acc + g.chapters.length, 0) || 1;
-        const perChQ = Math.max(1, Math.floor(Number(totalQuestions) / totalChs));
-
-        for (const g of resolvedSubjectGroups) {
-          for (const ch of g.chapters) {
-            await tx.blueprintRule.create({
-              data: {
-                blueprintId: bp.id,
-                subjectId: g.subject.id,
-                chapterId: ch.id,
-                selectionCount: perChQ,
-              },
-            });
-          }
-        }
       } else {
         // FULL_EXAM
         const subjectsList = await tx.subject.findMany({
@@ -915,7 +848,6 @@ export class ExamScheduleService {
         version = await tx.examVersion.update({
           where: { id: version.id },
           data: {
-            blueprintId: blueprintId || undefined,
             totalQuestions: Number(totalQuestions),
             durationMinutes,
             totalMarks: Number(totalQuestions) * marksPerQ,
@@ -925,7 +857,6 @@ export class ExamScheduleService {
         version = await tx.examVersion.create({
           data: {
             examId: exam.id,
-            blueprintId: blueprintId || undefined,
             versionNumber: 1,
             status: 'PUBLISHED',
             totalQuestions: Number(totalQuestions),
@@ -1103,16 +1034,6 @@ export class ExamScheduleService {
         examTarget: true,
         status: true,
         sections: { include: { subject: true } },
-        blueprints: {
-          include: {
-            rules: {
-              include: {
-                chapter: true,
-                subject: true,
-              },
-            },
-          },
-        },
         languages: { include: { language: true } },
         schedules: { orderBy: { createdAt: 'desc' }, take: 1 },
       },
@@ -1144,7 +1065,6 @@ export class ExamScheduleService {
       subjects: thresholdMetadata.subjects || exam.sections.map((s) => ({ subjectId: s.subjectId, name: s.subject?.name, questionCount: s.totalQuestions })),
       subjectIds: thresholdMetadata.subjectIds || exam.sections.map((s) => s.subjectId),
       sections: exam.sections,
-      blueprints: exam.blueprints,
     };
   }
 

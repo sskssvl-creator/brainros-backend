@@ -328,9 +328,17 @@ export class BillingService {
     dto: UpdateSchoolPricingDto,
     userId: string,
   ) {
-    if (!dto.pricePerStudent || isNaN(dto.pricePerStudent) || dto.pricePerStudent <= 0) {
+    const rawPrice = dto.pricePerStudent ?? dto.price;
+    if (rawPrice === undefined || rawPrice === null || isNaN(Number(rawPrice)) || Number(rawPrice) <= 0) {
       throw new BadRequestException('Invalid pricing rate. Price must be greater than zero.');
     }
+
+    const priceNumber = Number(rawPrice);
+    if (priceNumber > 1000000) {
+      throw new BadRequestException('Price per student cannot exceed ₹10,00,000.');
+    }
+
+    const finalPrice = Math.round(priceNumber * 100) / 100;
 
     const institution = await this.prisma.institution.findUnique({
       where: { id: institutionId },
@@ -355,7 +363,7 @@ export class BillingService {
       const newPricing = await (tx as any).institutionPricing.create({
         data: {
           institutionId,
-          pricePerStudent: dto.pricePerStudent,
+          pricePerStudent: finalPrice,
           currency: 'INR',
           effectiveFrom,
           effectiveTo,
@@ -375,25 +383,117 @@ export class BillingService {
           entityType: 'INSTITUTION',
           entityId: institutionId,
           beforeState: { pricePerStudent: oldPrice },
-          afterState: { pricePerStudent: dto.pricePerStudent },
+          afterState: { pricePerStudent: finalPrice },
           metadata: {
             schoolName: institution.name,
             schoolCode: institution.code,
             oldPrice,
-            newPrice: dto.pricePerStudent,
+            newPrice: finalPrice,
             effectiveFrom: effectiveFrom.toISOString(),
             changedAt: new Date().toISOString(),
           },
         },
       });
 
+      // Recalculate & regenerate already generated invoices for this school (if and only if already generated)
+      const existingBillsWhere: any = {
+        institutionId,
+        status: { not: 'REJECTED' },
+      };
+
+      if (dto.billingYear && dto.billingMonth) {
+        existingBillsWhere.billingYear = dto.billingYear;
+        existingBillsWhere.billingMonth = dto.billingMonth;
+      }
+
+      const existingBills = await tx.bill.findMany({
+        where: existingBillsWhere,
+      });
+
+      let recalculatedCount = 0;
+      const taxConfig = await this.getTaxConfiguration();
+
+      for (const bill of existingBills) {
+        const studentCount = bill.studentCount > 0 ? bill.studentCount : await this.countEligibleStudents(institutionId);
+        const taxableAmount = Math.round(studentCount * finalPrice * 100) / 100;
+        const taxDetails = this.calculateTaxForInstitution(taxableAmount, institution, taxConfig);
+
+        const updatedMetadata = {
+          ...(typeof bill.metadata === 'object' && bill.metadata !== null ? (bill.metadata as Record<string, any>) : {}),
+          taxSnapshot: {
+            ...taxDetails,
+            taxConfig,
+            recalculatedAt: new Date().toISOString(),
+            previousPrice: bill.pricePerStudent,
+            newPrice: finalPrice,
+          },
+          lastPriceRecalculatedAt: new Date().toISOString(),
+        };
+
+        await tx.bill.update({
+          where: { id: bill.id },
+          data: {
+            pricePerStudent: finalPrice,
+            studentCount,
+            amount: taxableAmount,
+            tax: taxDetails.totalTax,
+            totalAmount: taxDetails.grandTotal,
+            pdfStorageKey: null,
+            metadata: JSON.parse(JSON.stringify(updatedMetadata)),
+          },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            actorUserId: userId,
+            action: 'INVOICE_RECALCULATED_ON_PRICE_UPDATE',
+            entityType: 'BILL',
+            entityId: bill.id,
+            beforeState: {
+              billNumber: bill.billNumber,
+              pricePerStudent: bill.pricePerStudent,
+              amount: bill.amount,
+              tax: bill.tax,
+              totalAmount: bill.totalAmount,
+            },
+            afterState: {
+              billNumber: bill.billNumber,
+              pricePerStudent: finalPrice,
+              amount: taxableAmount,
+              tax: taxDetails.totalTax,
+              totalAmount: taxDetails.grandTotal,
+            },
+            metadata: {
+              billNumber: bill.billNumber,
+              institutionId,
+              schoolName: institution.name,
+              oldPrice: bill.pricePerStudent,
+              newPrice: finalPrice,
+              studentCount,
+              taxableAmount,
+              totalTax: taxDetails.totalTax,
+              grandTotal: taxDetails.grandTotal,
+              reason: 'Automatic regeneration on school price update',
+              timestamp: new Date().toISOString(),
+            },
+          },
+        });
+
+        recalculatedCount++;
+      }
+
       this.logger.log(
-        `School pricing for '${institution.name}' updated from ₹${oldPrice} to ₹${dto.pricePerStudent} by user '${userId}'`,
+        `School pricing for '${institution.name}' updated from ₹${oldPrice} to ₹${finalPrice} by user '${userId}'. Regenerated ${recalculatedCount} existing invoice(s).`,
       );
+
+      const message = recalculatedCount > 0
+        ? `Pricing updated to ₹${finalPrice}/student. Regenerated ${recalculatedCount} existing invoice(s) with new rate.`
+        : `Pricing updated to ₹${finalPrice}/student.`;
 
       return {
         pricing: newPricing,
-        message: `Pricing for ${institution.name} updated to ₹${dto.pricePerStudent}/student/month. Future invoices will adhere to this rate; historical invoices remain strictly unaffected.`,
+        recalculatedCount,
+        message,
       };
     });
   }
@@ -755,11 +855,8 @@ export class BillingService {
     }
 
     // Current school-specific price snapshot and dynamic GST calculation
-    const schoolPrice = await this.getSchoolPrice(institutionId);
-    const pricePerStudent =
-      typeof dto.pricePerStudent === 'number' && dto.pricePerStudent >= 0
-        ? dto.pricePerStudent
-        : schoolPrice;
+    const billingPeriodDate = new Date(billingYear, billingMonth - 1, 28);
+    const pricePerStudent = await this.getSchoolPrice(institutionId, billingPeriodDate);
     const taxableAmount = studentCount * pricePerStudent;
     const taxConfig = await this.getTaxConfiguration();
     const taxDetails = this.calculateTaxForInstitution(taxableAmount, institution, taxConfig);
@@ -846,6 +943,7 @@ export class BillingService {
   async generateBulkInvoices(dto: GenerateInvoiceDto, userId: string) {
     const { billingMonth, billingYear } = dto;
     const periodLabel = `${MONTH_NAMES[billingMonth]} ${billingYear}`;
+    const periodDate = new Date(billingYear, billingMonth - 1, 28);
     const defaultPrice = await this.getPricingSetting();
     const taxConfig = await this.getTaxConfiguration();
 
@@ -867,17 +965,19 @@ export class BillingService {
       { totalSchools, billingMonth, billingYear },
     );
 
-    // 1. Batch pre-fetch active custom pricings across candidate institutions
+    // 1. Batch pre-fetch active custom pricings across candidate institutions for this billing period
     const customPricings = await (this.prisma as any).institutionPricing.findMany({
       where: {
         institutionId: { in: instIds },
         isActive: true,
+        effectiveFrom: { lte: periodDate },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gte: periodDate } }],
       },
       orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
     });
     const pricingMap = new Map<string, number>();
     for (const p of customPricings) {
-      if (!pricingMap.has(p.institutionId)) {
+      if (!pricingMap.has(p.institutionId) && p.pricePerStudent > 0) {
         pricingMap.set(p.institutionId, p.pricePerStudent);
       }
     }
@@ -942,10 +1042,7 @@ export class BillingService {
           if (studentCount === 0) {
             skippedCount++;
           } else {
-            const schoolPrice =
-              typeof dto.pricePerStudent === 'number' && dto.pricePerStudent >= 0
-                ? dto.pricePerStudent
-                : (pricingMap.get(inst.id) || defaultPrice);
+            const schoolPrice = pricingMap.get(inst.id) || defaultPrice;
             const taxableAmount = studentCount * schoolPrice;
             const taxDetails = this.calculateTaxForInstitution(taxableAmount, inst, taxConfig);
             const billNumber = `${invoicePrefix}${String(currentSequence++).padStart(4, '0')}`;
@@ -1233,6 +1330,25 @@ export class BillingService {
         billMap.set(b.institutionId, b);
       }
 
+      // Pre-fetch active custom pricings across schools for this billing period
+      const schoolIds = allSchools.map((s) => s.id);
+      const periodDate = new Date(yearNum, monthNum - 1, 28);
+      const customPricings = await (this.prisma as any).institutionPricing.findMany({
+        where: {
+          institutionId: { in: schoolIds },
+          isActive: true,
+          effectiveFrom: { lte: periodDate },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gte: periodDate } }],
+        },
+        orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
+      });
+      const pricingMap = new Map<string, number>();
+      for (const p of customPricings) {
+        if (!pricingMap.has(p.institutionId) && p.pricePerStudent > 0) {
+          pricingMap.set(p.institutionId, p.pricePerStudent);
+        }
+      }
+
       let combined: any[] = [];
       for (const school of allSchools) {
         if (filter.institutionId && filter.institutionId !== 'ALL' && filter.institutionId !== school.id) {
@@ -1279,7 +1395,8 @@ export class BillingService {
           });
         } else {
           const studentCount = await this.countEligibleStudents(school.id);
-          const taxableAmount = studentCount * currentPrice;
+          const schoolPrice = pricingMap.get(school.id) || currentPrice;
+          const taxableAmount = studentCount * schoolPrice;
           const taxDetails = this.calculateTaxForInstitution(taxableAmount, school, taxConfig);
 
           combined.push({
@@ -1290,7 +1407,7 @@ export class BillingService {
             billingYear: yearNum,
             billingPeriod: `${MONTH_NAMES[monthNum]} ${yearNum}`,
             studentCount,
-            pricePerStudent: currentPrice,
+            pricePerStudent: schoolPrice,
             description: `Student Platform Subscription (${MONTH_NAMES[monthNum]} ${yearNum})`,
             amount: taxableAmount,
             tax: taxDetails.totalTax,
@@ -1693,6 +1810,64 @@ export class BillingService {
 
       return updated;
     });
+  }
+
+  /**
+   * ── UPDATE INVOICE STATUS (PAID / UNPAID) ─────────────────────────
+   */
+  async updateBillStatus(billId: string, statusInput: string, userId: string) {
+    const bill = await this.prisma.bill.findUnique({
+      where: { id: billId },
+      include: { institution: true },
+    });
+
+    if (!bill) {
+      throw new NotFoundException(`Invoice '${billId}' not found.`);
+    }
+
+    const normalizedStatus = statusInput.toUpperCase() === 'UNPAID' ? 'GENERATED' : statusInput.toUpperCase();
+    const oldStatus = bill.status;
+
+    const updated = await this.prisma.bill.update({
+      where: { id: billId },
+      data: {
+        status: normalizedStatus as any,
+        ...(normalizedStatus === 'PAID' ? { approvedById: userId, approvedAt: new Date() } : {}),
+      },
+      include: {
+        institution: { select: { id: true, name: true, code: true, email: true, phone: true } },
+        createdBy: { select: { id: true, name: true, email: true } },
+      },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        actorUserId: userId,
+        action: 'BILL_STATUS_CHANGED',
+        entityType: 'BILL',
+        entityId: bill.id,
+        beforeState: { status: oldStatus },
+        afterState: { status: normalizedStatus },
+        metadata: {
+          billNumber: bill.billNumber,
+          institutionId: bill.institutionId,
+          schoolName: bill.institution?.name,
+          oldStatus,
+          newStatus: normalizedStatus,
+          displayStatus: statusInput.toUpperCase(),
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    this.logger.log(
+      `Invoice ${bill.billNumber} status updated from ${oldStatus} to ${normalizedStatus} by user ${userId}`,
+    );
+
+    return {
+      bill: updated,
+      message: `Invoice ${bill.billNumber} marked as ${statusInput.toUpperCase() === 'PAID' ? 'Paid' : 'Unpaid'}.`,
+    };
   }
 
   /**

@@ -26,6 +26,7 @@ import {
   UpdatePricingDto,
   UpdateSchoolPricingDto,
   SendBulkInvoicesDto,
+  UpdateBillStatusDto,
 } from '../dto/billing.dto';
 
 @Controller('billing')
@@ -97,12 +98,63 @@ export class BillingController {
   }
 
   /**
-   * PUT /billing/schools/:id/pricing
+  /**
+   * PATCH /billing/schools/:id/price
+   * PATCH /billing/schools/:id/pricing
    * Update school-specific price per student per month
    */
+  @Patch('schools/:id/price')
+  @Roles('SUPER_ADMIN')
+  async updateSchoolPrice(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') userId: string,
+    @Body() dto: UpdateSchoolPricingDto,
+  ) {
+    const data = await this.billingService.updateSchoolPricing(id, dto, userId);
+    return {
+      statusCode: 200,
+      message: data.message,
+      data: data.pricing,
+    };
+  }
+
+  @Patch('schools/:id/pricing')
+  @Roles('SUPER_ADMIN')
+  async updateSchoolPricingPatch(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') userId: string,
+    @Body() dto: UpdateSchoolPricingDto,
+  ) {
+    const data = await this.billingService.updateSchoolPricing(id, dto, userId);
+    return {
+      statusCode: 200,
+      message: data.message,
+      data: data.pricing,
+    };
+  }
+
+  /**
+   * PUT /billing/schools/:id/price
+   * PUT /billing/schools/:id/pricing
+   */
+  @Put('schools/:id/price')
+  @Roles('SUPER_ADMIN')
+  async updateSchoolPricePut(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') userId: string,
+    @Body() dto: UpdateSchoolPricingDto,
+  ) {
+    const data = await this.billingService.updateSchoolPricing(id, dto, userId);
+    return {
+      statusCode: 200,
+      message: data.message,
+      data: data.pricing,
+    };
+  }
+
   @Put('schools/:id/pricing')
   @Roles('SUPER_ADMIN')
-  async updateSchoolPricing(
+  async updateSchoolPricingPut(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') userId: string,
     @Body() dto: UpdateSchoolPricingDto,
@@ -384,6 +436,25 @@ export class BillingController {
       statusCode: 200,
       message: 'Bill has been rejected.',
       data,
+    };
+  }
+
+  /**
+   * PATCH /billing/bills/:id/status
+   * Super Admin & Accountant updates payment status (Paid / Unpaid)
+   */
+  @Patch('bills/:id/status')
+  @Roles('SUPER_ADMIN', 'ACCOUNTANT')
+  async updateBillStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser('userId') userId: string,
+    @Body() dto: UpdateBillStatusDto,
+  ) {
+    const data = await this.billingService.updateBillStatus(id, dto.status, userId);
+    return {
+      statusCode: 200,
+      message: data.message,
+      data: data.bill,
     };
   }
 

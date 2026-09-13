@@ -473,16 +473,15 @@ export class AcademicService {
   async deleteChapter(id: string, actorUserId?: string) {
     const existing = await this.findChapterById(id);
 
-    const [questionsCount, topicsCount, blueprintRulesCount, chapterResultsCount] =
+    const [questionsCount, topicsCount, chapterResultsCount] =
       await Promise.all([
         this.prisma.question.count({ where: { chapterId: id } }),
         this.prisma.topic.count({ where: { chapterId: id } }),
-        this.prisma.blueprintRule.count({ where: { chapterId: id } }),
         this.prisma.chapterResult.count({ where: { chapterId: id } }),
       ]);
 
     const totalDependencies =
-      questionsCount + topicsCount + blueprintRulesCount + chapterResultsCount;
+      questionsCount + topicsCount + chapterResultsCount;
 
     if (totalDependencies > 0) {
       // Deactivate/archive instead of hard-deleting

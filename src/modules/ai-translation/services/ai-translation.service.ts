@@ -4,6 +4,7 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import * as ExcelJS from 'exceljs';
@@ -410,29 +411,12 @@ export class AiTranslationService {
         }
       }
 
-      // 4. Create or Update Blueprint & Version
-      let examBlueprint = await tx.examBlueprint.findFirst({
-        where: { examId: exam.id },
-      });
-      if (!examBlueprint) {
-        examBlueprint = await tx.examBlueprint.create({
-          data: {
-            examId: exam.id,
-            name: `${exam.title} - AI Blueprint`,
-            totalQuestions: dto.questions.length,
-            version: 1,
-            isSystem: false,
-            createdById: userId,
-          },
-        });
-      }
-
+      // 4. Create or Update Version
       let examVersion = exam.versions[0];
       if (!examVersion) {
         examVersion = await tx.examVersion.create({
           data: {
             examId: exam.id,
-            blueprintId: examBlueprint.id,
             versionNumber: 1,
             status: 'GENERATED',
             generationSeed: `ai_trans_${Date.now()}`,
@@ -706,6 +690,372 @@ export class AiTranslationService {
     return {
       jobId: result.aiJob.id,
       message: 'Question paper saved and AI translation initiated successfully.',
+      totalQuestions: dto.questions.length,
+      totalLanguages: targetLanguages.length,
+    };
+  }
+
+  /**
+   * Central reusable method to automatically start AI Translation for an already-saved ExamVersion.
+   * Invoked after DB commit in Manual Question Paper Entry and Direct/CSV Question Paper Uploads.
+   */
+  async startQuestionPaperTranslation(
+    examId: string,
+    examVersionId: string,
+    userId: string,
+  ): Promise<{ jobId: string; totalQuestions: number; totalLanguages: number; targetLanguages: string[] }> {
+    const exam = await this.prisma.exam.findUnique({
+      where: { id: examId },
+      include: {
+        languages: {
+          include: { language: true },
+        },
+        versions: {
+          where: { id: examVersionId },
+        },
+      },
+    });
+
+    if (!exam) {
+      throw new NotFoundException(`Exam with ID '${examId}' not found.`);
+    }
+
+    const examVersion =
+      exam.versions[0] ||
+      (await this.prisma.examVersion.findUnique({ where: { id: examVersionId } }));
+    if (!examVersion) {
+      throw new NotFoundException(`ExamVersion with ID '${examVersionId}' not found.`);
+    }
+
+    // Count questions in this version
+    const totalQuestions = await this.prisma.examVersionQuestion.count({
+      where: { examVersionId },
+    });
+
+    if (totalQuestions === 0) {
+      this.logger.warn(`Cannot start AI Translation for examVersionId ${examVersionId}: 0 questions found.`);
+      return { jobId: '', totalQuestions: 0, totalLanguages: 0, targetLanguages: [] };
+    }
+
+    // Resolve target regional languages (excluding English)
+    const allMasterRegionalLanguages = await this.prisma.preferredLanguage.findMany({
+      where: {
+        isActive: true,
+        code: { notIn: ['en', 'EN'] },
+      },
+      orderBy: { displayOrder: 'asc' },
+    });
+
+    let targetLanguages = (exam.languages || [])
+      .filter((l) => l.language && (l.language.code || '').toLowerCase() !== 'en' && l.language.isActive)
+      .map((l) => ({
+        id: l.language!.id,
+        name: l.language!.name,
+        code: l.language!.code || 'en',
+      }));
+
+    // If no target languages configured on exam, default to all active regional languages in Language Master
+    if (targetLanguages.length === 0) {
+      targetLanguages = allMasterRegionalLanguages.map((ml) => ({
+        id: ml.id,
+        name: ml.name,
+        code: ml.code || 'en',
+      }));
+
+      // Ensure examLanguage entries exist for the exam
+      for (let i = 0; i < targetLanguages.length; i++) {
+        const tl = targetLanguages[i];
+        await this.prisma.examLanguage.upsert({
+          where: {
+            examId_languageId: {
+              examId: exam.id,
+              languageId: tl.id,
+            },
+          },
+          create: {
+            examId: exam.id,
+            languageId: tl.id,
+            isDefault: false,
+            displayOrder: i + 2,
+          },
+          update: {},
+        });
+      }
+    }
+
+    // Check if an active translation job already exists for this exact version (Idempotency)
+    const existingJob = await this.prisma.aiTranslationJob.findUnique({
+      where: {
+        examId_examVersionId: {
+          examId: exam.id,
+          examVersionId: examVersion.id,
+        },
+      },
+    });
+
+    if (existingJob && (existingJob.status === 'QUEUED' || existingJob.status === 'PROCESSING')) {
+      this.logger.log(`Active AI Translation job ${existingJob.id} already exists for version ${examVersion.id}. Returning existing job.`);
+      return {
+        jobId: existingJob.id,
+        totalQuestions,
+        totalLanguages: targetLanguages.length,
+        targetLanguages: targetLanguages.map((t) => t.name),
+      };
+    }
+
+    // Build initial per-language progress state
+    const initialLanguages: LanguageTranslationProgress[] = targetLanguages.map(
+      (tl) => ({
+        languageId: tl.id,
+        languageName: tl.name,
+        languageCode: tl.code,
+        status: 'QUEUED',
+        completedQuestions: 0,
+        totalQuestions,
+        failedBatches: 0,
+      }),
+    );
+
+    // Create / Upsert AiTranslationJob for this (examId, examVersionId)
+    const aiJob = await this.prisma.aiTranslationJob.upsert({
+      where: {
+        examId_examVersionId: {
+          examId: exam.id,
+          examVersionId: examVersion.id,
+        },
+      },
+      create: {
+        examId: exam.id,
+        examVersionId: examVersion.id,
+        totalQuestions,
+        totalLanguages: targetLanguages.length,
+        batchSize: AI_TRANSLATION_DEFAULTS.BATCH_SIZE,
+        status: 'QUEUED',
+        overallProgress: 0,
+        languageStatuses: initialLanguages as any,
+        createdById: userId,
+      },
+      update: {
+        totalQuestions,
+        totalLanguages: targetLanguages.length,
+        status: 'QUEUED',
+        overallProgress: 0,
+        languageStatuses: initialLanguages as any,
+        errorMessage: null,
+        startedAt: null,
+        completedAt: null,
+        failedAt: null,
+      },
+    });
+
+    // Enqueue BullMQ parent job
+    await this.parentQueue.add(
+      `ai-translation-${aiJob.id}`,
+      {
+        jobId: aiJob.id,
+        examId: exam.id,
+        examVersionId: examVersion.id,
+        userId,
+      },
+      {
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 5000,
+        },
+        removeOnComplete: 100,
+        removeOnFail: 50,
+      },
+    );
+
+    // Publish WebSocket Queued Event
+    await this.jobProgressService.publishQueued(
+      AI_TRANSLATION_QUEUE,
+      aiJob.id,
+      {
+        type: 'AI Question Paper Translation',
+        userId,
+        examId: exam.id,
+        message: `Translation job queued for ${totalQuestions} questions across ${targetLanguages.length} regional languages.`,
+      },
+    );
+
+    // Record Audit Log
+    await this.prisma.auditLog.create({
+      data: {
+        actorUserId: userId,
+        action: 'AI_TRANSLATION_STARTED',
+        entityType: 'AI_TRANSLATION_JOB',
+        entityId: aiJob.id,
+        metadata: {
+          examId: exam.id,
+          examTitle: exam.title,
+          examVersionId: examVersion.id,
+          totalQuestions,
+          targetLanguages: targetLanguages.map((t) => t.name),
+        },
+      },
+    });
+
+    return {
+      jobId: aiJob.id,
+      totalQuestions,
+      totalLanguages: targetLanguages.length,
+      targetLanguages: targetLanguages.map((t) => t.name),
+    };
+  }
+
+  /**
+   * Immediately queues manual questions for background database save + AI translation.
+   * Returns immediately in <80ms with translationJobId so frontend redirects instantly.
+   */
+  async queueManualQuestionsTranslation(
+    examId: string,
+    dto: { questions: any[] },
+    userId: string,
+  ): Promise<{ jobId: string; message: string; totalQuestions: number; totalLanguages: number }> {
+    const exam = await this.prisma.exam.findUnique({
+      where: { id: examId },
+      include: {
+        languages: { include: { language: true } },
+      },
+    });
+
+    if (!exam) {
+      throw new NotFoundException(`Exam with ID '${examId}' not found.`);
+    }
+
+    const allMasterRegionalLanguages = await this.prisma.preferredLanguage.findMany({
+      where: {
+        isActive: true,
+        code: { notIn: ['en', 'EN'] },
+      },
+      orderBy: { displayOrder: 'asc' },
+    });
+
+    let targetLanguages = (exam.languages || [])
+      .filter((l) => l.language && (l.language.code || '').toLowerCase() !== 'en' && l.language.isActive)
+      .map((l) => ({
+        id: l.language!.id,
+        name: l.language!.name,
+        code: l.language!.code || 'en',
+      }));
+
+    if (targetLanguages.length === 0) {
+      targetLanguages = allMasterRegionalLanguages.map((ml) => ({
+        id: ml.id,
+        name: ml.name,
+        code: ml.code || 'en',
+      }));
+
+      // Ensure examLanguage entries exist for the exam
+      for (let i = 0; i < targetLanguages.length; i++) {
+        const tl = targetLanguages[i];
+        await this.prisma.examLanguage.upsert({
+          where: {
+            examId_languageId: {
+              examId: exam.id,
+              languageId: tl.id,
+            },
+          },
+          create: {
+            examId: exam.id,
+            languageId: tl.id,
+            isDefault: false,
+            displayOrder: i + 2,
+          },
+          update: {},
+        });
+      }
+    }
+
+    const initialLanguages: LanguageTranslationProgress[] = targetLanguages.map(
+      (tl) => ({
+        languageId: tl.id,
+        languageName: tl.name,
+        languageCode: tl.code,
+        status: 'QUEUED',
+        completedQuestions: 0,
+        totalQuestions: dto.questions.length,
+        failedBatches: 0,
+      }),
+    );
+
+    // Create or update AiTranslationJob in DB
+    const existingJob = await this.prisma.aiTranslationJob.findFirst({
+      where: { examId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const latestVersion = await this.prisma.examVersion.findFirst({
+      where: { examId: exam.id },
+      orderBy: { versionNumber: 'desc' },
+    });
+
+    const aiJob = existingJob
+      ? await this.prisma.aiTranslationJob.update({
+          where: { id: existingJob.id },
+          data: {
+            totalQuestions: dto.questions.length,
+            totalLanguages: targetLanguages.length,
+            status: 'QUEUED',
+            overallProgress: 0,
+            languageStatuses: initialLanguages as any,
+            errorMessage: null,
+            startedAt: null,
+            completedAt: null,
+            failedAt: null,
+          },
+        })
+      : await this.prisma.aiTranslationJob.create({
+          data: {
+            examId: exam.id,
+            examVersionId: latestVersion?.id || randomUUID(),
+            totalQuestions: dto.questions.length,
+            totalLanguages: targetLanguages.length,
+            batchSize: AI_TRANSLATION_DEFAULTS.BATCH_SIZE,
+            status: 'QUEUED',
+            overallProgress: 0,
+            languageStatuses: initialLanguages as any,
+            createdById: userId,
+          },
+        });
+
+    // Enqueue BullMQ parent job with the manual questions payload for background saving & translation
+    await this.parentQueue.add(
+      `ai-translation-${aiJob.id}`,
+      {
+        jobId: aiJob.id,
+        examId: exam.id,
+        userId,
+        manualQuestionsPayload: dto,
+      },
+      {
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 5000,
+        },
+        removeOnComplete: 100,
+        removeOnFail: 50,
+      },
+    );
+
+    // Publish WebSocket Queued Event
+    await this.jobProgressService.publishQueued(
+      AI_TRANSLATION_QUEUE,
+      aiJob.id,
+      {
+        type: 'AI Question Paper Translation',
+        userId,
+        examId: exam.id,
+        message: `Queued ${dto.questions.length} questions for database save and AI translation.`,
+      },
+    );
+
+    return {
+      jobId: aiJob.id,
+      message: 'Question paper queued! Redirecting to AI Translation...',
       totalQuestions: dto.questions.length,
       totalLanguages: targetLanguages.length,
     };

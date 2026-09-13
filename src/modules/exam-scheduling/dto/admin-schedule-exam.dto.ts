@@ -26,11 +26,6 @@ export enum FullExamTargetEnum {
   CET = 'CET',
 }
 
-export enum FullExamConfigModeEnum {
-  MANUAL = 'MANUAL',
-  BLUEPRINT = 'BLUEPRINT',
-}
-
 export class SubjectScheduleItemDto {
   @IsNotEmpty()
   @IsUUID()
@@ -93,11 +88,6 @@ export class CheckQuestionAvailabilityDto {
   subjectGroups?: any;
 
   @IsOptional()
-  @ValidateIf((o, v) => !!v)
-  @IsUUID()
-  blueprintId?: string;
-
-  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
@@ -139,11 +129,6 @@ export class AdminScheduleExamDto {
   @IsUUID()
   examTargetId?: string;
 
-  @IsOptional()
-  @IsString()
-  @IsIn(['MANUAL', 'BLUEPRINT'])
-  configurationMode?: 'MANUAL' | 'BLUEPRINT' = 'MANUAL';
-
   // Single or multiple subjects for SPECIFIC_SUBJECT
   @IsOptional()
   @IsUUID()
@@ -173,10 +158,6 @@ export class AdminScheduleExamDto {
   @ValidateNested({ each: true })
   @Type(() => SubjectGroupScheduleItemDto)
   subjectGroups?: SubjectGroupScheduleItemDto[];
-
-  @IsOptional()
-  @IsUUID()
-  blueprintId?: string;
 
   @IsOptional()
   @IsInt()

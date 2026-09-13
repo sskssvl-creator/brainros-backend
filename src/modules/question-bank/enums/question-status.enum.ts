@@ -1,8 +1,0 @@
-export enum QuestionStatus {
-  DRAFT = 'DRAFT',
-  SUBMITTED = 'SUBMITTED',
-  UNDER_REVIEW = 'UNDER_REVIEW',
-  APPROVED = 'APPROVED',
-  REJECTED = 'REJECTED',
-  ARCHIVED = 'ARCHIVED',
-}

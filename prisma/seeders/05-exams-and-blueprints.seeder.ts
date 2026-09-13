@@ -264,56 +264,7 @@ export async function seedExamsAndBlueprints(ctx: SeedContext): Promise<SeederRe
     }
     ctx.examQuestions.set(exam.id, examQuestionsList);
 
-    // 3. Exam Blueprint & Snapshot Version (Immutable Exam Version)
-    let blueprint = await prisma.examBlueprint.findFirst({ where: { examId: exam.id } });
-    if (!blueprint) {
-      blueprint = await prisma.examBlueprint.create({
-        data: {
-          examId: exam.id,
-          name: `${eData.title} Blueprint v1`,
-          totalQuestions: eData.totalQuestions,
-          version: 1,
-          isActive: true,
-          isSystem: eData.isSystem || false,
-          createdById: adminUser.id,
-        },
-      });
-      inc('exam_blueprints', true);
-
-      // Seed rules for system blueprints
-      if (eData.isSystem) {
-        let priority = 1;
-        if (eData.code === 'TEMPLATE_JEE') {
-          const phy = ctx.subjects.get('Physics (JEE)')!;
-          const chem = ctx.subjects.get('Chemistry (JEE)')!;
-          const math = ctx.subjects.get('Mathematics')!;
-          await prisma.blueprintRule.createMany({
-            data: [
-              { blueprintId: blueprint.id, subjectId: phy.id, type: 'SINGLE_CORRECT', selectionCount: 20, priority: priority++ },
-              { blueprintId: blueprint.id, subjectId: phy.id, type: 'NUMERICAL', selectionCount: 5, priority: priority++ },
-              { blueprintId: blueprint.id, subjectId: chem.id, type: 'SINGLE_CORRECT', selectionCount: 20, priority: priority++ },
-              { blueprintId: blueprint.id, subjectId: chem.id, type: 'NUMERICAL', selectionCount: 5, priority: priority++ },
-              { blueprintId: blueprint.id, subjectId: math.id, type: 'SINGLE_CORRECT', selectionCount: 20, priority: priority++ },
-              { blueprintId: blueprint.id, subjectId: math.id, type: 'NUMERICAL', selectionCount: 5, priority: priority++ },
-            ],
-          });
-        } else if (eData.code === 'TEMPLATE_NEET') {
-          const phy = ctx.subjects.get('Physics (NEET)')!;
-          const chem = ctx.subjects.get('Chemistry (NEET)')!;
-          const bot = ctx.subjects.get('Botany')!;
-          const zoo = ctx.subjects.get('Zoology')!;
-          await prisma.blueprintRule.createMany({
-            data: [
-              { blueprintId: blueprint.id, subjectId: phy.id, selectionCount: 45, priority: priority++ },
-              { blueprintId: blueprint.id, subjectId: chem.id, selectionCount: 45, priority: priority++ },
-              { blueprintId: blueprint.id, subjectId: bot.id, selectionCount: 45, priority: priority++ },
-              { blueprintId: blueprint.id, subjectId: zoo.id, selectionCount: 45, priority: priority++ },
-            ],
-          });
-        }
-      }
-    }
-
+    // 3. Snapshot Version (Immutable Exam Version)
     if (!eData.isSystem) {
       let examVersion = await prisma.examVersion.findUnique({
         where: { examId_versionNumber: { examId: exam.id, versionNumber: 1 } },
@@ -323,7 +274,6 @@ export async function seedExamsAndBlueprints(ctx: SeedContext): Promise<SeederRe
         examVersion = await prisma.examVersion.create({
           data: {
             examId: exam.id,
-            blueprintId: blueprint.id,
             versionNumber: 1,
             status: ExamVersionStatus.PUBLISHED,
             totalQuestions: eData.totalQuestions,
