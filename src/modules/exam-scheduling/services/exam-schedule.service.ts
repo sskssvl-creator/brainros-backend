@@ -364,7 +364,7 @@ export class ExamScheduleService {
         `Exam '${examId}' scheduled (Schedule ID: '${schedule.id}') by user '${scheduledById}'`,
       );
       return schedule;
-    });
+    }, { maxWait: 10000, timeout: 30000 });
 
     // 1. Direct in-app notification creation for all active students
     try {
@@ -706,141 +706,152 @@ export class ExamScheduleService {
       }
     }
 
+    let validLanguageId: string | null = null;
+    if (dto.languageId) {
+      const lang = await this.prisma.preferredLanguage.findUnique({
+        where: { id: dto.languageId },
+        select: { id: true },
+      });
+      if (lang) {
+        validLanguageId = lang.id;
+      }
+    }
+
     const scheduledStatus = await this.lifecycleService.getOrCreateExamStatus('SCHEDULED');
 
     // Create or Edit Exam, Version & Schedule in a transaction
-    const scheduleRecord: any = await this.prisma.$transaction(async (tx) => {
-      const marksPerQ = dto.marksPerQuestion !== undefined && dto.marksPerQuestion >= 0 ? Number(dto.marksPerQuestion) : 4;
-      const negMarks = dto.negativeMarks !== undefined && dto.negativeMarks >= 0 ? Number(dto.negativeMarks) : 1;
+    const scheduleRecord: any = await this.prisma.$transaction(
+      async (tx) => {
+        const marksPerQ = dto.marksPerQuestion !== undefined && dto.marksPerQuestion >= 0 ? Number(dto.marksPerQuestion) : 4;
+        const negMarks = dto.negativeMarks !== undefined && dto.negativeMarks >= 0 ? Number(dto.negativeMarks) : 1;
 
-      let exam: any;
-      let isEdit = false;
+        let exam: any;
+        let isEdit = false;
 
-      if (dto.examId) {
-        // Edit existing exam
-        exam = await tx.exam.findUnique({
-          where: { id: dto.examId },
-          include: { sections: true, schedules: true },
-        });
-        if (!exam) {
-          throw new NotFoundException(`Exam with ID '${dto.examId}' not found.`);
-        }
-        isEdit = true;
+        if (dto.examId) {
+          // Edit existing exam
+          exam = await tx.exam.findUnique({
+            where: { id: dto.examId },
+            include: { sections: true, schedules: true },
+          });
+          if (!exam) {
+            throw new NotFoundException(`Exam with ID '${dto.examId}' not found.`);
+          }
+          isEdit = true;
 
-        exam = await tx.exam.update({
-          where: { id: dto.examId },
-          data: {
-            examTargetId,
-            title,
-            description: dto.description?.trim() || exam.description,
-            totalQuestions: Number(totalQuestions),
-            totalMarks: Number(totalQuestions) * marksPerQ,
-            durationMinutes,
-            defaultMarksPerQuestion: marksPerQ,
-            defaultNegativeMarks: negMarks,
-            startTime,
-            endTime,
-            performanceThresholds: JSON.parse(
-              JSON.stringify({
-                examType: dto.examType,
-                subjectGroups: dto.subjectGroups,
-                subjects: dto.subjects,
-                subjectIds: dto.subjectIds,
-              }),
-            ),
-          },
-        });
-
-        // Delete existing sections to rebuild
-        await tx.examSection.deleteMany({ where: { examId: exam.id } });
-      } else {
-        // Create new Exam record
-        exam = await tx.exam.create({
-          data: {
-            examTargetId,
-            title,
-            description: dto.description?.trim() || `Scheduled via Admin Exam Manager (${dto.examType})`,
-            totalQuestions: Number(totalQuestions),
-            totalMarks: Number(totalQuestions) * marksPerQ,
-            durationMinutes,
-            defaultMarksPerQuestion: marksPerQ,
-            defaultNegativeMarks: negMarks,
-            statusId: scheduledStatus.id,
-            startTime,
-            endTime,
-            createdById: scheduledById,
-            performanceThresholds: JSON.parse(
-              JSON.stringify({
-                examType: dto.examType,
-                subjectGroups: dto.subjectGroups,
-                subjects: dto.subjects,
-                subjectIds: dto.subjectIds,
-              }),
-            ),
-          },
-        });
-      }
-
-      if (dto.languageId) {
-        await tx.examLanguage.deleteMany({ where: { examId: exam.id } });
-        await tx.examLanguage.create({
-          data: {
-            examId: exam.id,
-            languageId: dto.languageId,
-            isDefault: true,
-            displayOrder: 1,
-          },
-        }).catch(() => null);
-      }
-
-      // 2. Create Sections
-      if (examTypeUpper === 'SPECIFIC_SUBJECT') {
-        const sectionQ = Math.floor(Number(totalQuestions) / (resolvedSubjects.length || 1));
-        for (let i = 0; i < resolvedSubjects.length; i++) {
-          const s = resolvedSubjects[i];
-          await tx.examSection.create({
+          exam = await tx.exam.update({
+            where: { id: dto.examId },
             data: {
+              examTargetId,
+              title,
+              description: dto.description?.trim() || exam.description,
+              totalQuestions: Number(totalQuestions),
+              totalMarks: Number(totalQuestions) * marksPerQ,
+              durationMinutes,
+              defaultMarksPerQuestion: marksPerQ,
+              defaultNegativeMarks: negMarks,
+              startTime,
+              endTime,
+              performanceThresholds: JSON.parse(
+                JSON.stringify({
+                  examType: dto.examType,
+                  subjectGroups: dto.subjectGroups,
+                  subjects: dto.subjects,
+                  subjectIds: dto.subjectIds,
+                }),
+              ),
+            },
+          });
+
+          // Delete existing sections to rebuild
+          await tx.examSection.deleteMany({ where: { examId: exam.id } });
+        } else {
+          // Create new Exam record
+          exam = await tx.exam.create({
+            data: {
+              examTargetId,
+              title,
+              description: dto.description?.trim() || `Scheduled via Admin Exam Manager (${dto.examType})`,
+              totalQuestions: Number(totalQuestions),
+              totalMarks: Number(totalQuestions) * marksPerQ,
+              durationMinutes,
+              defaultMarksPerQuestion: marksPerQ,
+              defaultNegativeMarks: negMarks,
+              statusId: scheduledStatus.id,
+              startTime,
+              endTime,
+              createdById: scheduledById,
+              performanceThresholds: JSON.parse(
+                JSON.stringify({
+                  examType: dto.examType,
+                  subjectGroups: dto.subjectGroups,
+                  subjects: dto.subjects,
+                  subjectIds: dto.subjectIds,
+                }),
+              ),
+            },
+          });
+        }
+
+        if (validLanguageId) {
+          await tx.examLanguage.deleteMany({ where: { examId: exam.id } });
+          await tx.examLanguage.create({
+            data: {
+              examId: exam.id,
+              languageId: validLanguageId,
+              isDefault: true,
+              displayOrder: 1,
+            },
+          });
+        }
+
+        // 2. Create Sections
+        const sectionRows: any[] = [];
+        if (examTypeUpper === 'SPECIFIC_SUBJECT') {
+          const sectionQ = Math.floor(Number(totalQuestions) / (resolvedSubjects.length || 1));
+          for (let i = 0; i < resolvedSubjects.length; i++) {
+            const s = resolvedSubjects[i];
+            sectionRows.push({
               examId: exam.id,
               subjectId: s.id,
               name: `${s.name} Section`,
               totalQuestions: s.customQuestionCount || sectionQ,
               displayOrder: i + 1,
-            },
-          });
-        }
-      } else if (examTypeUpper === 'SPECIFIC_CHAPTER') {
-        const sectionQ = Math.floor(Number(totalQuestions) / (resolvedSubjectGroups.length || 1));
-        for (let i = 0; i < resolvedSubjectGroups.length; i++) {
-          const g = resolvedSubjectGroups[i];
-          await tx.examSection.create({
-            data: {
+            });
+          }
+        } else if (examTypeUpper === 'SPECIFIC_CHAPTER') {
+          const sectionQ = Math.floor(Number(totalQuestions) / (resolvedSubjectGroups.length || 1));
+          for (let i = 0; i < resolvedSubjectGroups.length; i++) {
+            const g = resolvedSubjectGroups[i];
+            sectionRows.push({
               examId: exam.id,
               subjectId: g.subject.id,
               name: `${g.subject.name} Section`,
               totalQuestions: g.questionCount || sectionQ,
               displayOrder: i + 1,
-            },
+            });
+          }
+        } else {
+          // FULL_EXAM
+          const subjectsList = await tx.subject.findMany({
+            where: { examTargetId },
+            take: 4,
           });
-        }
-      } else {
-        // FULL_EXAM
-        const subjectsList = await tx.subject.findMany({
-          where: { examTargetId },
-          take: 4,
-        });
-        const sectionQuestions = Math.floor(Number(totalQuestions) / (subjectsList.length || 1));
-        for (let i = 0; i < subjectsList.length; i++) {
-          await tx.examSection.create({
-            data: {
+          const sectionQuestions = Math.floor(Number(totalQuestions) / (subjectsList.length || 1));
+          for (let i = 0; i < subjectsList.length; i++) {
+            sectionRows.push({
               examId: exam.id,
               subjectId: subjectsList[i].id,
               name: `${subjectsList[i].name} Section`,
               totalQuestions: sectionQuestions,
               displayOrder: i + 1,
-            },
-          });
+            });
+          }
         }
-      }
+
+        if (sectionRows.length > 0) {
+          await tx.examSection.createMany({ data: sectionRows });
+        }
 
       // 3. Create or update ExamVersion
       let version = await tx.examVersion.findFirst({ where: { examId: exam.id } });
@@ -968,7 +979,7 @@ export class ExamScheduleService {
       });
 
       return schedule;
-    });
+    }, { maxWait: 10000, timeout: 30000 });
 
     // Asynchronous student notification
     try {
@@ -1189,7 +1200,7 @@ export class ExamScheduleService {
         `Schedule '${scheduleId}' rescheduled by user '${performedById}'`,
       );
       return updatedSchedule;
-    });
+    }, { maxWait: 10000, timeout: 30000 });
 
     // Asynchronously dispatch BullMQ notification job
     this.notificationQueue.dispatchExamNotificationJob({
@@ -1375,7 +1386,7 @@ export class ExamScheduleService {
         message: 'Exam successfully activated by Super Admin.',
         schedule: updatedSchedule,
       };
-    });
+    }, { maxWait: 10000, timeout: 30000 });
 
     // Asynchronously dispatch BullMQ notification job for activation
     this.notificationQueue.dispatchExamNotificationJob({

@@ -167,7 +167,7 @@ export class ExamLifecycleService {
 
       this.logger.log(`Exam '${examId}' submitted by user '${performedById}'`);
       return updated;
-    });
+    }, { maxWait: 10000, timeout: 30000 });
   }
 
   /**
@@ -224,7 +224,7 @@ export class ExamLifecycleService {
         `Exam '${examId}' approved by Super Admin '${performedById}'`,
       );
       return updated;
-    });
+    }, { maxWait: 10000, timeout: 30000 });
   }
 
   /**
@@ -277,7 +277,7 @@ export class ExamLifecycleService {
         `Exam '${examId}' rejected by Super Admin '${performedById}': ${reason}`,
       );
       return updated;
-    });
+    }, { maxWait: 10000, timeout: 30000 });
   }
 
   /**
@@ -335,7 +335,7 @@ export class ExamLifecycleService {
 
       this.logger.log(`Exam '${examId}' cancelled by user '${performedById}'`);
       return updatedExam;
-    });
+    }, { maxWait: 10000, timeout: 30000 });
 
     // Invalidate Redis question cache for cancelled exam
     await this.examCacheService.invalidateExamCache(examId).catch((cErr: any) => {
@@ -551,7 +551,7 @@ export class ExamLifecycleService {
 
       this.logger.log(`Exam '${examId}' transitioned to ENDED.`);
       return updated;
-    });
+    }, { maxWait: 10000, timeout: 30000 });
   }
 
   /**
