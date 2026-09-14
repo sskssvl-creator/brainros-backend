@@ -1,5 +1,10 @@
 import './common/infrastructure/init-bullmq';
-import 'dotenv/config';
+import * as dotenv from 'dotenv';
+import * as fs from 'fs';
+if (fs.existsSync('.env.production')) {
+  dotenv.config({ path: '.env.production' });
+}
+dotenv.config({ path: '.env' });
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe, BadRequestException } from '@nestjs/common';
@@ -159,8 +164,19 @@ async function bootstrap() {
           field: err.property,
           messages: Object.values(err.constraints || {}),
         }));
+
+        const firstMessage = formattedErrors[0]?.messages?.[0];
+        const readableSummary =
+          formattedErrors.length === 1
+            ? firstMessage || 'Please correct the invalid field and try again.'
+            : firstMessage
+              ? `${firstMessage} (and ${formattedErrors.length - 1} other field issue${formattedErrors.length > 2 ? 's' : ''})`
+              : 'Please review and correct the invalid form fields.';
+
         return new BadRequestException({
-          message: 'Validation failed',
+          statusCode: 400,
+          code: 'VALIDATION_ERROR',
+          message: readableSummary,
           error: 'Bad Request',
           details: formattedErrors,
         });

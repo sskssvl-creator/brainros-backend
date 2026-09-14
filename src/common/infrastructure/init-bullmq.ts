@@ -1,4 +1,9 @@
-import 'dotenv/config';
+import * as dotenv from 'dotenv';
+import * as fs from 'fs';
+if (fs.existsSync('.env.production')) {
+  dotenv.config({ path: '.env.production' });
+}
+dotenv.config({ path: '.env' });
 import { Logger } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { MockQueue, MockWorker } from './mock-queue';

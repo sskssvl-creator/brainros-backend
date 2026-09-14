@@ -1854,7 +1854,7 @@ export class AuthService {
 
     if (!user) {
       throw new InternalServerErrorException(
-        'Failed to retrieve or create user.',
+        'Unable to complete login. Please check your credentials and try again.',
       );
     }
 
@@ -2039,7 +2039,7 @@ export class AuthService {
 
     if (!user) {
       throw new InternalServerErrorException(
-        'Failed to create or retrieve user.',
+        'Unable to complete Google sign-in. Please try again.',
       );
     }
 

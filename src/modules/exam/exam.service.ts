@@ -701,7 +701,10 @@ export class ExamService {
         await tx.attempt.deleteMany({ where: { examId: id } });
       }
 
-      // 2. Delete exam version questions & exam versions
+      // 2. Delete schedules first to release foreign keys on exam_versions
+      await tx.examSchedule.deleteMany({ where: { examId: id } });
+
+      // 3. Delete exam version questions & exam versions
       const versions = await tx.examVersion.findMany({
         where: { examId: id },
         select: { id: true },
@@ -714,10 +717,9 @@ export class ExamService {
         await tx.examVersion.deleteMany({ where: { examId: id } });
       }
 
-      // 4. Delete questions, sections, schedules
+      // 4. Delete questions, sections
       await tx.examQuestion.deleteMany({ where: { examId: id } });
       await tx.examSection.deleteMany({ where: { examId: id } });
-      await tx.examSchedule.deleteMany({ where: { examId: id } });
 
       // 5. Delete the exam record
       await tx.exam.delete({ where: { id } });
@@ -1623,7 +1625,7 @@ export class ExamService {
     const questions = await this.prisma.question.findMany({
       where: { id: { in: questionIds } },
       include: {
-        subject: { select: { id: true, name: true, examTargetId: true } },
+        subject: { select: { id: true, name: true } },
         chapter: { select: { id: true, name: true } },
         topic: { select: { id: true, name: true } },
         options: { orderBy: { displayOrder: 'asc' } },

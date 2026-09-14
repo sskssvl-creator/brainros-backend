@@ -1,6 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GeminiRateLimiterService } from './gemini-rate-limiter.service';
+import {
+  GeminiErrorClassifier,
+  GeminiErrorKind,
+} from './gemini-error-classifier';
+import { AI_TRANSLATION_DEFAULTS } from '../constants/ai-translation.constants';
 
 export interface QuestionBatchItem {
   questionNumber: number;
@@ -25,16 +31,40 @@ export class GeminiTranslationService {
   private readonly logger = new Logger(GeminiTranslationService.name);
   private genAI: GoogleGenerativeAI | null = null;
   private modelName: string;
+  private maxRetries: number;
+  private retryBufferMs: number;
 
-  constructor(private readonly configService: ConfigService) {
-    const apiKey =
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly rateLimiter: GeminiRateLimiterService,
+  ) {
+    const rawKey =
       this.configService.get<string>('GEMINI_API_KEY') ||
       process.env.GEMINI_API_KEY ||
       '';
-    this.modelName =
+    const apiKey = rawKey.trim().replace(/^["']|["']$/g, '');
+
+    this.modelName = (
+      this.configService.get<string>('GEMINI_TRANSLATION_MODEL') ||
       this.configService.get<string>('GEMINI_MODEL') ||
+      process.env.GEMINI_TRANSLATION_MODEL ||
       process.env.GEMINI_MODEL ||
-      'gemini-3.6-flash';
+      AI_TRANSLATION_DEFAULTS.DEFAULT_MODEL
+    )
+      .trim()
+      .replace(/^["']|["']$/g, '');
+
+    this.maxRetries = Number(
+      this.configService.get<number>('GEMINI_MAX_RETRIES') ||
+        process.env.GEMINI_MAX_RETRIES ||
+        AI_TRANSLATION_DEFAULTS.MAX_RETRIES,
+    );
+
+    this.retryBufferMs = Number(
+      this.configService.get<number>('GEMINI_RETRY_BUFFER_MS') ||
+        process.env.GEMINI_RETRY_BUFFER_MS ||
+        AI_TRANSLATION_DEFAULTS.RETRY_BUFFER_MS,
+    );
 
     if (apiKey) {
       this.genAI = new GoogleGenerativeAI(apiKey);
@@ -46,17 +76,23 @@ export class GeminiTranslationService {
   }
 
   /**
-   * Translate a batch of questions to the target language
+   * Translate a batch of questions to the target language through the Global Rate Limiter
    */
   async translateBatch(
     questions: QuestionBatchItem[],
     targetLanguageName: string,
     targetLanguageCode: string,
   ): Promise<TranslatedQuestionBatchItem[]> {
+    if (!questions || questions.length === 0) {
+      return [];
+    }
+
     if (!this.genAI) {
-      const apiKey =
+      const rawKey =
         this.configService.get<string>('GEMINI_API_KEY') ||
-        process.env.GEMINI_API_KEY;
+        process.env.GEMINI_API_KEY ||
+        '';
+      const apiKey = rawKey.trim().replace(/^["']|["']$/g, '');
       if (!apiKey) {
         throw new Error(
           'GEMINI_API_KEY is missing. Please configure it in environment variables.',
@@ -66,12 +102,9 @@ export class GeminiTranslationService {
     }
 
     const prompt = this.buildPrompt(questions, targetLanguageName, targetLanguageCode);
-    const candidateModels = Array.from(
-      new Set([this.modelName, 'gemini-3.6-flash', 'gemini-flash-latest']),
-    );
+    const candidateModels = this.resolveCandidateModels();
 
     let lastError: Error | null = null;
-    const maxAttempts = 3;
 
     for (const modelId of candidateModels) {
       const model = this.genAI.getGenerativeModel({
@@ -82,7 +115,10 @@ export class GeminiTranslationService {
         },
       });
 
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+        // Acquire global rate limit slot (coordinated across all workers & instances)
+        const releaseSlot = await this.rateLimiter.acquireSlot();
+
         try {
           const result = await model.generateContent(prompt);
           const responseText = result.response.text();
@@ -90,27 +126,76 @@ export class GeminiTranslationService {
           return parsed;
         } catch (err: any) {
           lastError = err;
-          const isModelMissing =
-            err?.message?.includes('404') || err?.message?.includes('not found');
+          const classified = GeminiErrorClassifier.classify(err, {
+            defaultRetryDelayMs: 5000,
+            retryBufferMs: this.retryBufferMs,
+          });
+
           this.logger.warn(
-            `Gemini translation attempt ${attempt}/${maxAttempts} with model '${modelId}' failed for language ${targetLanguageName}: ${err.message}`,
+            `[${modelId}] Translation attempt ${attempt}/${this.maxRetries} failed for ${targetLanguageName}: [${classified.kind}] ${err.message}`,
           );
 
-          if (isModelMissing) {
-            // Immediately switch to next candidate model
+          // Handle 401 Authentication & 400 Malformed requests -> Immediate fail
+          if (
+            classified.kind === GeminiErrorKind.AUTHENTICATION_ERROR ||
+            classified.kind === GeminiErrorKind.INVALID_REQUEST
+          ) {
+            throw new Error(classified.userFacingMessage);
+          }
+
+          // Handle Model Missing -> Skip to next model
+          if (classified.kind === GeminiErrorKind.MODEL_UNAVAILABLE) {
             break;
           }
 
-          if (attempt < maxAttempts) {
-            const delay = Math.pow(2, attempt) * 1500;
-            await new Promise((res) => setTimeout(res, delay));
+          // Handle Daily Quota Exhaustion -> Pause globally and throw user-facing error
+          if (classified.kind === GeminiErrorKind.DAILY_QUOTA_EXHAUSTED) {
+            await this.rateLimiter.pauseGlobally(
+              3600000, // 1 hour pause
+              'Daily Gemini API Quota Exhausted',
+            );
+            throw new Error(classified.userFacingMessage);
           }
+
+          // Handle Temporary 429 Rate Limit -> Pause globally across all workers
+          if (classified.kind === GeminiErrorKind.TEMPORARY_RATE_LIMIT) {
+            await this.rateLimiter.pauseGlobally(
+              classified.retryDelayMs,
+              `HTTP 429 for ${modelId}: ${err.message}`,
+            );
+          }
+
+          // If retryable and attempts remain, wait before next loop
+          if (classified.isRetryable && attempt < this.maxRetries) {
+            const waitMs = Math.max(classified.retryDelayMs, 2000);
+            this.logger.log(
+              `Waiting ${Math.round(waitMs / 1000)}s before retry attempt ${attempt + 1}...`,
+            );
+            await new Promise((res) => setTimeout(res, waitMs));
+          } else if (!classified.isRetryable) {
+            // Non-retryable error on this model -> switch model or throw
+            break;
+          }
+        } finally {
+          releaseSlot();
         }
       }
     }
 
-    throw new Error(
-      `Gemini AI Translation failed after trying models [${candidateModels.join(', ')}]: ${lastError?.message || 'Unknown error'}`,
+    const sanitizedMessage = GeminiErrorClassifier.sanitize(lastError);
+    throw new Error(sanitizedMessage);
+  }
+
+  private resolveCandidateModels(): string[] {
+    const verified = AI_TRANSLATION_DEFAULTS.VERIFIED_MODELS;
+    const candidates = [this.modelName, ...verified];
+    return Array.from(new Set(candidates)).filter(
+      (m) =>
+        Boolean(m) &&
+        !m.includes('3.8') &&
+        !m.includes('3.6') &&
+        !m.includes('preview') &&
+        !m.includes('latest'),
     );
   }
 
@@ -122,19 +207,21 @@ export class GeminiTranslationService {
     return `You are a certified professional academic translator specializing in educational and competitive examination question papers.
 Translate the following exam questions and their multiple choice options from English into ${targetLanguageName} (${targetLanguageCode}).
 
-STRICT RULES:
-1. Translate the 'question', 'optionA', 'optionB', 'optionC', and 'optionD' text accurately with formal academic vocabulary.
-2. DO NOT change or reorder 'questionNumber'.
-3. Preserve all mathematical notation, formulas, chemical equations, numerical values, units, variable names, and proper nouns (names of people/places).
-4. Output strictly a valid JSON array of objects with the exact schema:
+STRICT TRANSLATION RULES:
+1. Translate the 'question', 'optionA', 'optionB', 'optionC', and 'optionD' text accurately into ${targetLanguageName}.
+2. ALL output text for 'question', 'optionA', 'optionB', 'optionC', and 'optionD' MUST be written in the native script/alphabet of ${targetLanguageName} (e.g. Gujarati script for Gujarati, Devanagari script for Hindi/Marathi, Tamil script for Tamil, Telugu script for Telugu, Bengali script for Bengali, Malayalam script for Malayalam, Kannada script for Kannada).
+3. Do NOT leave sentences, placeholder words, or text in English/Latin characters when translating into a regional language. Even if the input contains test data, dummy words, or placeholder text, translate and render them completely into ${targetLanguageName}'s native script.
+4. DO NOT change or reorder 'questionNumber'.
+5. Preserve mathematical formulas, chemical equations, numerical values, and standard scientific units (e.g. m/s², kg, °C).
+6. Output strictly a valid JSON array of objects with the exact schema:
 [
   {
     "questionNumber": number,
-    "question": "translated question text",
-    "optionA": "translated option A",
-    "optionB": "translated option B",
-    "optionC": "translated option C",
-    "optionD": "translated option D"
+    "question": "translated question text in ${targetLanguageName}",
+    "optionA": "translated option A in ${targetLanguageName}",
+    "optionB": "translated option B in ${targetLanguageName}",
+    "optionC": "translated option C in ${targetLanguageName}",
+    "optionD": "translated option D in ${targetLanguageName}"
   }
 ]
 
@@ -163,11 +250,11 @@ ${JSON.stringify(questions, null, 2)}
       cleanText = cleanText.trim();
       rawJson = JSON.parse(cleanText);
     } catch (e: any) {
-      throw new Error(`Invalid JSON returned from Gemini model: ${e.message}`);
+      throw new Error(`Invalid JSON returned from AI model: ${e.message}`);
     }
 
     if (!Array.isArray(rawJson)) {
-      throw new Error('Gemini response is not a JSON array.');
+      throw new Error('AI response is not a valid JSON array.');
     }
 
     const resultMap = new Map<number, TranslatedQuestionBatchItem>();

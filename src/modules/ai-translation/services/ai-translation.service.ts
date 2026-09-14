@@ -285,7 +285,9 @@ export class AiTranslationService {
 
     // Find default subject & chapter for questions
     let defaultSubject = await this.prisma.subject.findFirst({
-      where: { examTargetId: exam.examTargetId },
+      where: exam.examTargetId
+        ? { examTargetSubjects: { some: { examTargetId: exam.examTargetId } } }
+        : undefined,
     });
     if (!defaultSubject) {
       defaultSubject = await this.prisma.subject.findFirst();
@@ -293,9 +295,8 @@ export class AiTranslationService {
     if (!defaultSubject) {
       defaultSubject = await this.prisma.subject.create({
         data: {
-          examTargetId: exam.examTargetId,
-          name: 'General',
-          code: 'GEN',
+          name: 'Physics',
+          code: 'PHY',
         },
       });
     }
@@ -479,7 +480,7 @@ export class AiTranslationService {
               optionKey: optDef.key,
               optionLabel: optDef.key,
               optionText: optDef.text,
-              isCorrect: false, // Answer key uploaded separately
+              isCorrect: optDef.key === qRow.correctAnswer, // Fixed: was hardcoded false
               displayOrder: oIdx + 1,
             },
           });
@@ -595,7 +596,7 @@ export class AiTranslationService {
           languageId: tl.id,
           languageName: tl.name,
           languageCode: tl.code,
-          status: 'QUEUED',
+          status: 'WAITING',
           completedQuestions: 0,
           totalQuestions: dto.questions.length,
           failedBatches: 0,
@@ -809,7 +810,7 @@ export class AiTranslationService {
         languageId: tl.id,
         languageName: tl.name,
         languageCode: tl.code,
-        status: 'QUEUED',
+        status: 'WAITING',
         completedQuestions: 0,
         totalQuestions,
         failedBatches: 0,
@@ -974,7 +975,7 @@ export class AiTranslationService {
         languageId: tl.id,
         languageName: tl.name,
         languageCode: tl.code,
-        status: 'QUEUED',
+        status: 'WAITING',
         completedQuestions: 0,
         totalQuestions: dto.questions.length,
         failedBatches: 0,
@@ -1022,24 +1023,30 @@ export class AiTranslationService {
         });
 
     // Enqueue BullMQ parent job with the manual questions payload for background saving & translation
-    await this.parentQueue.add(
-      `ai-translation-${aiJob.id}`,
-      {
-        jobId: aiJob.id,
-        examId: exam.id,
-        userId,
-        manualQuestionsPayload: dto,
-      },
-      {
-        attempts: 3,
-        backoff: {
-          type: 'exponential',
-          delay: 5000,
+    try {
+      await this.parentQueue.add(
+        `ai-translation-${aiJob.id}`,
+        {
+          jobId: aiJob.id,
+          examId: exam.id,
+          userId,
+          manualQuestionsPayload: dto,
         },
-        removeOnComplete: 100,
-        removeOnFail: 50,
-      },
-    );
+        {
+          attempts: 3,
+          backoff: {
+            type: 'exponential',
+            delay: 5000,
+          },
+          removeOnComplete: 100,
+          removeOnFail: 50,
+        },
+      );
+    } catch (err: any) {
+      this.logger.warn(
+        `[AiTranslationService] Could not enqueue job ${aiJob.id} to parent queue (${err.message}). Queue operating in degraded mode.`,
+      );
+    }
 
     // Publish WebSocket Queued Event
     await this.jobProgressService.publishQueued(
@@ -1089,6 +1096,7 @@ export class AiTranslationService {
       batchSize: job.batchSize,
       status: job.status,
       overallProgress: job.overallProgress,
+      dbSaveProgress: (job as any).dbSaveProgress ?? 100,
       languageStatuses: (job.languageStatuses as any as LanguageTranslationProgress[]) || [],
       startedAt: job.startedAt,
       completedAt: job.completedAt,
@@ -1278,17 +1286,15 @@ export class AiTranslationService {
       },
     });
 
-    await this.languageQueue.add(
-      `retry-${language.code || 'lang'}-${jobId}`,
+    await this.parentQueue.add(
+      `retry-lang-${language.code || 'lang'}-${jobId}`,
       {
         jobId,
         examId: job.examId,
         examVersionId: job.examVersionId,
-        languageId: language.id,
-        languageName: language.name,
-        languageCode: language.code || 'en',
         userId,
-      },
+        retryLanguageId: languageId,
+      } as any,
       {
         attempts: 3,
         backoff: { type: 'exponential', delay: 3000 },

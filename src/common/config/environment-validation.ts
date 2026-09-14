@@ -18,15 +18,10 @@ export function validateEnvironment(logger: AppLoggerService): void {
   }
 
   if (missing.length > 0) {
-    const errorMsg = `[STARTUP WARNING] Missing recommended environment variable(s): ${missing.join(', ')}. Database operations will fail or operate in degraded mode.`;
-    logger.error(errorMsg, undefined, 'ConfigValidation');
-  }
-
-  if (!process.env.MSG91_AUTH_KEY || !process.env.MSG91_AUTH_KEY.trim()) {
-    logger.warn(
-      '[ConfigValidation] MSG91_AUTH_KEY is not configured in .env. MSG91 OTP Widget verification will fail until set.',
-      'ConfigValidation',
-    );
+    const errorMsg = `Missing required environment variable(s): ${missing.join(', ')}`;
+    logger.fatal(errorMsg, undefined, 'ConfigValidation');
+    process.exit(1);
+    throw new Error(errorMsg);
   }
 
   const isRedisEnabled =
@@ -36,7 +31,7 @@ export function validateEnvironment(logger: AppLoggerService): void {
 
   if (isRedisEnabled && !process.env.REDIS_URL && !process.env.REDIS_HOST) {
     logger.warn(
-      '[ConfigValidation] REDIS_ENABLED=true but neither REDIS_URL nor REDIS_HOST is set. Defaulting to localhost:6379 with in-memory fallback.',
+      '[ConfigValidation] REDIS_ENABLED=true but neither REDIS_URL nor REDIS_HOST is set. Defaulting to 127.0.0.1:6379 with in-memory fallback.',
       'ConfigValidation',
     );
   }
@@ -49,7 +44,7 @@ export function validateEnvironment(logger: AppLoggerService): void {
       jwtSecret === 'your-strong-production-jwt-secret-here'
     ) {
       logger.warn(
-        '[SECURITY WARNING] Running in production with default/missing JWT_SECRET. Please set a dedicated JWT_SECRET in environment variables.',
+        `[ConfigValidation] JWT_SECRET is using placeholder or default value. Make sure a strong dedicated JWT_SECRET is set for live environments.`,
         'ConfigValidation',
       );
     }
@@ -61,15 +56,13 @@ export function validateEnvironment(logger: AppLoggerService): void {
       !parseBooleanFlag(process.env.ENABLE_REAL_OTP);
 
     if (isBypassOtp || isLoginOtpDbMode || isRealOtpFalse) {
-      const activeInsecureFlags: string[] = [];
-      if (isBypassOtp) activeInsecureFlags.push('BYPASS_OTP=true');
-      if (isLoginOtpDbMode) activeInsecureFlags.push('LOGIN_OTP_DATABASE_MODE=true');
-      if (isRealOtpFalse) activeInsecureFlags.push('ENABLE_REAL_OTP=false');
+      const activeFlags: string[] = [];
+      if (isBypassOtp) activeFlags.push('BYPASS_OTP=true');
+      if (isLoginOtpDbMode) activeFlags.push('LOGIN_OTP_DATABASE_MODE=true');
+      if (isRealOtpFalse) activeFlags.push('ENABLE_REAL_OTP=false');
 
       logger.warn(
-        `[SECURITY WARNING] Insecure authentication bypass flags active in production: [${activeInsecureFlags.join(
-          ', ',
-        )}]. Ensure these are disabled for live user environments.`,
+        `[ConfigValidation] Authentication flags active: [${activeFlags.join(', ')}].`,
         'ConfigValidation',
       );
     }

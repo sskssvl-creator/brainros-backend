@@ -340,20 +340,45 @@ export class ExamPaperImportService {
       const sectionNameToDbRecord = new Map<string, any>();
       for (let sIdx = 0; sIdx < validationResult.sections.length; sIdx++) {
         const sec = validationResult.sections[sIdx];
+        const subLower = (sec.subject || '').toLowerCase().trim();
+        const cleanName = subLower.includes('physic')
+          ? 'Physics'
+          : subLower.includes('chem')
+          ? 'Chemistry'
+          : subLower.includes('math')
+          ? 'Mathematics'
+          : subLower.includes('bio') || subLower.includes('botan') || subLower.includes('zool')
+          ? 'Biology'
+          : sec.subject;
+
         let subject = await tx.subject.findFirst({
           where: {
-            examTargetId: exam.examTargetId,
-            name: { equals: sec.subject, mode: 'insensitive' },
+            name: { equals: cleanName, mode: 'insensitive' },
           },
         });
         if (!subject) {
           subject = await tx.subject.create({
             data: {
-              examTargetId: exam.examTargetId,
-              name: sec.subject,
-              code: sec.subject.toUpperCase().slice(0, 4),
+              name: cleanName,
+              code: cleanName.toUpperCase().slice(0, 4),
               displayOrder: sIdx + 1,
             },
+          });
+        }
+        if (exam.examTargetId) {
+          await tx.examTargetSubject.upsert({
+            where: {
+              examTargetId_subjectId: {
+                examTargetId: exam.examTargetId,
+                subjectId: subject.id,
+              },
+            },
+            create: {
+              examTargetId: exam.examTargetId,
+              subjectId: subject.id,
+              displayOrder: sIdx + 1,
+            },
+            update: {},
           });
         }
 
@@ -1122,22 +1147,48 @@ export class ExamPaperImportService {
       for (let sIdx = 0; sIdx < validation.sections.length; sIdx++) {
         const sec = validation.sections[sIdx];
 
-        // Find or create Subject under exam target
+        // Find or create global Subject
+        const subLower = (sec.subject || '').toLowerCase().trim();
+        const cleanName = subLower.includes('physic')
+          ? 'Physics'
+          : subLower.includes('chem')
+          ? 'Chemistry'
+          : subLower.includes('math')
+          ? 'Mathematics'
+          : subLower.includes('bio') || subLower.includes('botan') || subLower.includes('zool')
+          ? 'Biology'
+          : sec.subject;
+
         let subject = await tx.subject.findFirst({
           where: {
-            examTargetId: examTarget.id,
-            name: { equals: sec.subject, mode: 'insensitive' },
+            name: { equals: cleanName, mode: 'insensitive' },
           },
         });
 
         if (!subject) {
           subject = await tx.subject.create({
             data: {
-              examTargetId: examTarget.id,
-              name: sec.subject,
-              code: sec.subject.toUpperCase().slice(0, 4),
+              name: cleanName,
+              code: cleanName.toUpperCase().slice(0, 4),
               displayOrder: sIdx + 1,
             },
+          });
+        }
+
+        if (examTarget?.id) {
+          await tx.examTargetSubject.upsert({
+            where: {
+              examTargetId_subjectId: {
+                examTargetId: examTarget.id,
+                subjectId: subject.id,
+              },
+            },
+            create: {
+              examTargetId: examTarget.id,
+              subjectId: subject.id,
+              displayOrder: sIdx + 1,
+            },
+            update: {},
           });
         }
 

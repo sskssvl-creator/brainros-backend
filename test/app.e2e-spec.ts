@@ -66,8 +66,17 @@ describe('Authentication & Passwordless Flow (e2e)', () => {
             field: err.property,
             messages: Object.values(err.constraints || {}),
           }));
+          const firstMessage = formattedErrors[0]?.messages?.[0];
+          const readableSummary =
+            formattedErrors.length === 1
+              ? firstMessage || 'Please correct the invalid field and try again.'
+              : firstMessage
+                ? `${firstMessage} (and ${formattedErrors.length - 1} other field issue${formattedErrors.length > 2 ? 's' : ''})`
+                : 'Please review and correct the invalid form fields.';
           return new BadRequestException({
-            message: 'Validation failed',
+            statusCode: 400,
+            code: 'VALIDATION_ERROR',
+            message: readableSummary,
             error: 'Bad Request',
             details: formattedErrors,
           });
@@ -109,7 +118,9 @@ describe('Authentication & Passwordless Flow (e2e)', () => {
       .expect(400);
 
     expect(response.body.success).toBe(false);
-    expect(response.body.message).toBe('Validation failed');
+    expect(response.body.details).toBeDefined();
+    expect(response.body.message).toBeDefined();
+    expect(response.body.message.length).toBeGreaterThan(0);
   });
 
   it('3. GET /auth/options should return available registration options', async () => {

@@ -12,9 +12,9 @@ import { Type } from 'class-transformer';
 // ─── Subjects ──────────────────────────────────────────────────
 
 export class CreateSubjectDto {
-  @IsNotEmpty()
+  @IsOptional()
   @IsUUID('4')
-  examTargetId: string;
+  examTargetId?: string;
 
   @IsNotEmpty()
   @IsString()

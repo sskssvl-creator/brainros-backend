@@ -321,6 +321,12 @@ export class ExamLifecycleService {
         }
       }
 
+      // Mark calendar entries as CANCELLED
+      await tx.examCalendar.updateMany({
+        where: { examId },
+        data: { status: 'CANCELLED' },
+      });
+
       await this.recordHistory(
         {
           examId,

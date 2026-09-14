@@ -307,7 +307,7 @@ model ExamTarget {
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
   students    Student[]
-  subjects    Subject[]
+  examTargetSubjects ExamTargetSubject[]
   exams       Exam[]
   institutionBatches InstitutionBatch[]
   orders      Order[]
@@ -555,23 +555,36 @@ model District {
 // ═══════════════════════════════════════════════════════════════════
 
 model Subject {
-  id            String         @id @default(uuid()) @db.Uuid
-  examTargetId  String         @map("exam_target_id") @db.Uuid
-  name          String
-  code          String?
-  displayOrder  Int            @default(0) @map("display_order")
-  isActive      Boolean        @default(true) @map("is_active")
-  createdAt     DateTime       @default(now()) @map("created_at")
-  updatedAt     DateTime       @updatedAt @map("updated_at")
-  examTarget    ExamTarget     @relation(fields: [examTargetId], references: [id])
-  chapters      Chapter[]
-  questions     Question[]
-  examSections  ExamSection[]
-  subjectResults SubjectResult[]
+  id                 String              @id @default(uuid()) @db.Uuid
+  name               String              @unique
+  code               String?             @unique
+  displayOrder       Int                 @default(0) @map("display_order")
+  isActive           Boolean             @default(true) @map("is_active")
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+  examTargetSubjects ExamTargetSubject[]
+  chapters           Chapter[]
+  questions          Question[]
+  examSections       ExamSection[]
+  subjectResults     SubjectResult[]
 
-  @@unique([examTargetId, name])
-  @@index([examTargetId])
   @@map("subjects")
+}
+
+model ExamTargetSubject {
+  id           String     @id @default(uuid()) @db.Uuid
+  examTargetId String     @map("exam_target_id") @db.Uuid
+  subjectId    String     @map("subject_id") @db.Uuid
+  displayOrder Int        @default(0) @map("display_order")
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  examTarget   ExamTarget @relation(fields: [examTargetId], references: [id], onDelete: Cascade)
+  subject      Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([examTargetId, subjectId])
+  @@index([examTargetId])
+  @@index([subjectId])
+  @@map("exam_target_subjects")
 }
 
 model Chapter {
@@ -3015,6 +3028,7 @@ model AiTranslationJob {
   batchSize             Int                         @default(20) @map("batch_size")
   status                AiTranslationJobStatus      @default(QUEUED)
   overallProgress       Float                       @default(0) @map("overall_progress")
+  dbSaveProgress        Float                       @default(0) @map("db_save_progress")
   languageStatuses      Json                        @default("[]") @map("language_statuses")
   startedAt             DateTime?                   @map("started_at")
   completedAt           DateTime?                   @map("completed_at")

@@ -37,7 +37,7 @@ export class TwoFactorDotInProvider implements ITwoFactorProvider {
     if (!apiKey) {
       this.logger.error('2Factor.in API Key is missing in configuration.');
       throw new InternalServerErrorException(
-        '2Factor OTP provider is not properly configured.',
+        'SMS verification service is temporarily unavailable. Please try again later.',
       );
     }
     return apiKey.trim();
@@ -94,11 +94,11 @@ export class TwoFactorDotInProvider implements ITwoFactorProvider {
         resData.Status.toLowerCase() === 'success';
 
       if (!isSuccess) {
-        this.logger.error(
-          `[2FACTOR_SEND_FAILED] 2Factor Send OTP failed. Response: ${JSON.stringify(resData)}`,
+        this.logger.warn(
+          `[2FACTOR_SEND_FAILED] Status: ${resData.Status}, Details: ${resData.Details}`,
         );
         throw new BadRequestException(
-          resData.Details || 'Failed to send OTP via 2Factor. Check mobile number.',
+          'Unable to send OTP. Please verify your mobile number and try again.',
         );
       }
 
@@ -116,7 +116,7 @@ export class TwoFactorDotInProvider implements ITwoFactorProvider {
         `[2FACTOR_SEND_FAILED] Connection error: ${err instanceof Error ? err.message : String(err)}`,
       );
       throw new InternalServerErrorException(
-        'OTP service unavailable. Please try again.',
+        'SMS verification service is temporarily unavailable. Please try again in a few moments.',
       );
     }
   }
@@ -185,7 +185,7 @@ export class TwoFactorDotInProvider implements ITwoFactorProvider {
         `[2FACTOR_VERIFY_FAILED] 2Factor Verification error: ${err instanceof Error ? err.message : String(err)}`,
       );
       throw new InternalServerErrorException(
-        'OTP service unavailable. Please try again.',
+        'Verification service is temporarily unavailable. Please try again in a few moments.',
       );
     }
   }

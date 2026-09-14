@@ -58,7 +58,7 @@ export async function seedExamsAndBlueprints(ctx: SeedContext): Promise<SeederRe
       durationMinutes: 180,
       status: statusCompleted,
       isSystem: true,
-      subjects: ['Physics (JEE)', 'Chemistry (JEE)', 'Mathematics'],
+      subjects: ['Physics', 'Chemistry', 'Mathematics'],
     },
     {
       code: 'TEMPLATE_NEET',
@@ -70,7 +70,7 @@ export async function seedExamsAndBlueprints(ctx: SeedContext): Promise<SeederRe
       durationMinutes: 200,
       status: statusCompleted,
       isSystem: true,
-      subjects: ['Physics (NEET)', 'Chemistry (NEET)', 'Botany', 'Zoology'],
+      subjects: ['Physics', 'Chemistry', 'Biology'],
     },
     {
       code: 'EXAM_NEET_MOCK_01',
@@ -82,7 +82,7 @@ export async function seedExamsAndBlueprints(ctx: SeedContext): Promise<SeederRe
       durationMinutes: 60,
       status: statusCompleted, // Completed historical exam for trend testing
       isSystem: false,
-      subjects: ['Physics (NEET)', 'Chemistry (NEET)', 'Botany', 'Zoology'],
+      subjects: ['Physics', 'Chemistry', 'Biology'],
     },
     {
       code: 'EXAM_NEET_MOCK_02',
@@ -94,7 +94,7 @@ export async function seedExamsAndBlueprints(ctx: SeedContext): Promise<SeederRe
       durationMinutes: 60,
       status: statusActive, // Active exam currently in progress
       isSystem: false,
-      subjects: ['Physics (NEET)', 'Chemistry (NEET)', 'Botany', 'Zoology'],
+      subjects: ['Physics', 'Chemistry', 'Biology'],
     },
     {
       code: 'EXAM_JEE_MOCK_01',
@@ -106,7 +106,7 @@ export async function seedExamsAndBlueprints(ctx: SeedContext): Promise<SeederRe
       durationMinutes: 60,
       status: statusCompleted,
       isSystem: false,
-      subjects: ['Physics (JEE)', 'Chemistry (JEE)', 'Mathematics'],
+      subjects: ['Physics', 'Chemistry', 'Mathematics'],
     },
   ];
 

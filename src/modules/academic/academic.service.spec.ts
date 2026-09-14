@@ -246,4 +246,73 @@ describe('AcademicService - Chapter Master Data Management', () => {
       expect(result).toEqual([mockChapter]);
     });
   });
+
+  describe('Global Subjects & Exam Target Mapping', () => {
+    it('should return all global subjects when no exam target is specified', async () => {
+      const globalSubjects = [
+        { id: '1', name: 'Physics', code: 'PHY' },
+        { id: '2', name: 'Chemistry', code: 'CHEM' },
+        { id: '3', name: 'Mathematics', code: 'MATH' },
+        { id: '4', name: 'Biology', code: 'BIO' },
+      ];
+      prisma.subject.findMany.mockResolvedValue(globalSubjects);
+
+      const result = await service.findAllSubjects();
+
+      expect(prisma.subject.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: undefined,
+        }),
+      );
+      expect(result).toHaveLength(4);
+    });
+
+    it('should filter subjects by examTargetId using examTargetSubjects relation', async () => {
+      const jeeTargetId = 'jee-target-id';
+      const jeeSubjects = [
+        { id: '1', name: 'Physics', code: 'PHY' },
+        { id: '2', name: 'Chemistry', code: 'CHEM' },
+        { id: '3', name: 'Mathematics', code: 'MATH' },
+      ];
+      prisma.subject.findMany.mockResolvedValue(jeeSubjects);
+
+      const result = await service.findAllSubjects(jeeTargetId);
+
+      expect(prisma.subject.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            examTargetSubjects: {
+              some: {
+                OR: [{ examTargetId: jeeTargetId }],
+              },
+            },
+          },
+        }),
+      );
+      expect(result).toHaveLength(3);
+    });
+
+    it('should return hierarchy mapping subjects from examTargetSubjects', async () => {
+      const mockTargetWithSubjects = {
+        id: 'target-1',
+        name: 'JEE',
+        examTargetSubjects: [
+          { subject: { id: '1', name: 'Physics', chapters: [] } },
+          { subject: { id: '2', name: 'Chemistry', chapters: [] } },
+          { subject: { id: '3', name: 'Mathematics', chapters: [] } },
+        ],
+      };
+      prisma.examTarget = {
+        findUnique: jest.fn().mockResolvedValue(mockTargetWithSubjects),
+      };
+
+      const result = await service.getHierarchy('target-1');
+
+      expect(prisma.examTarget.findUnique).toHaveBeenCalled();
+      expect(result).toHaveLength(3);
+      expect(result[0].name).toBe('Physics');
+      expect(result[1].name).toBe('Chemistry');
+      expect(result[2].name).toBe('Mathematics');
+    });
+  });
 });

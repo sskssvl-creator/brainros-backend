@@ -68,9 +68,24 @@ export class ExamScheduleService {
         if (!group.subjectId) continue;
         const sub = await this.prisma.subject.findUnique({
           where: { id: group.subjectId },
-          select: { id: true, name: true, examTargetId: true },
+          select: { id: true, name: true },
         });
         if (!sub) continue;
+
+        if (resolvedTargetId) {
+          const isAllowed = await this.prisma.examTargetSubject.findUnique({
+            where: {
+              examTargetId_subjectId: {
+                examTargetId: resolvedTargetId,
+                subjectId: group.subjectId,
+              },
+            },
+          });
+          if (!isAllowed) {
+            const target = await this.prisma.examTarget.findUnique({ where: { id: resolvedTargetId }, select: { name: true } });
+            throw new BadRequestException(`Subject '${sub.name}' is not permitted for Exam Target '${target?.name || resolvedTargetId}'.`);
+          }
+        }
 
         let groupAvailable = 0;
         const chaptersInfo: any[] = [];
@@ -122,11 +137,23 @@ export class ExamScheduleService {
       for (const sId of uniqueSubIds) {
         const subject = await this.prisma.subject.findUnique({
           where: { id: sId },
-          select: { id: true, name: true, examTargetId: true },
+          select: { id: true, name: true },
         });
         if (!subject) continue;
-        if (resolvedTargetId && subject.examTargetId && subject.examTargetId !== resolvedTargetId) {
-          throw new BadRequestException(`Subject '${subject.name}' does not belong to the selected Exam Target.`);
+
+        if (resolvedTargetId) {
+          const isAllowed = await this.prisma.examTargetSubject.findUnique({
+            where: {
+              examTargetId_subjectId: {
+                examTargetId: resolvedTargetId,
+                subjectId: sId,
+              },
+            },
+          });
+          if (!isAllowed) {
+            const target = await this.prisma.examTarget.findUnique({ where: { id: resolvedTargetId }, select: { name: true } });
+            throw new BadRequestException(`Subject '${subject.name}' is not permitted for Exam Target '${target?.name || resolvedTargetId}'.`);
+          }
         }
 
         const count = await this.prisma.question.count({
@@ -148,7 +175,11 @@ export class ExamScheduleService {
       if (resolvedTargetId) {
         availableCount = await this.prisma.question.count({
           where: {
-            subject: { examTargetId: resolvedTargetId },
+            subject: {
+              examTargetSubjects: {
+                some: { examTargetId: resolvedTargetId },
+              },
+            },
             status: 'APPROVED',
             isActive: true,
           },
@@ -313,6 +344,17 @@ export class ExamScheduleService {
           },
         },
         tx,
+      );
+
+      // 4. Sync ExamCalendar entry
+      await this.syncToCalendar(
+        tx,
+        examId,
+        startTime,
+        endTime,
+        dto.timezone || 'Asia/Kolkata',
+        'CONFIRMED',
+        scheduledById,
       );
 
       // 4. Record AuditLog for Super Admin Exam Time Control
@@ -515,6 +557,24 @@ export class ExamScheduleService {
     const resolvedSubjects: any[] = [];
     const resolvedSubjectGroups: { subject: any; chapters: any[]; questionCount?: number }[] = [];
 
+    // Resolve Target ID if not already resolved
+    if (!examTargetId) {
+      const targetSearch = dto.examTargetName || (examTypeUpper === 'FULL_EXAM' ? 'NEET' : examTypeUpper);
+      const matched = await this.prisma.examTarget.findFirst({
+        where: { name: { contains: targetSearch === 'JEE_NEET_CET' ? 'NEET' : targetSearch, mode: 'insensitive' } },
+      });
+      if (matched) {
+        examTargetId = matched.id;
+        targetName = matched.name;
+      } else {
+        const fallback = await this.prisma.examTarget.findFirst();
+        if (fallback) {
+          examTargetId = fallback.id;
+          targetName = fallback.name;
+        }
+      }
+    }
+
     if (examTypeUpper === 'SPECIFIC_SUBJECT') {
       const subjectList: { subjectId: string; questionCount?: number }[] = [];
       if (dto.subjects && Array.isArray(dto.subjects) && dto.subjects.length > 0) {
@@ -544,20 +604,24 @@ export class ExamScheduleService {
 
         const subObj = await this.prisma.subject.findUnique({
           where: { id: s.subjectId },
-          include: { examTarget: true },
         });
         if (!subObj) {
           throw new NotFoundException(`Subject with ID '${s.subjectId}' not found.`);
         }
-        if (examTargetId && subObj.examTargetId && subObj.examTargetId !== examTargetId) {
-          throw new BadRequestException(`Subject '${subObj.name}' does not belong to the selected Exam Target.`);
+        if (examTargetId) {
+          const isAllowed = await this.prisma.examTargetSubject.findUnique({
+            where: {
+              examTargetId_subjectId: {
+                examTargetId,
+                subjectId: s.subjectId,
+              },
+            },
+          });
+          if (!isAllowed) {
+            throw new BadRequestException(`Subject '${subObj.name}' is not permitted for Exam Target '${targetName}'.`);
+          }
         }
         resolvedSubjects.push({ ...subObj, customQuestionCount: s.questionCount });
-      }
-
-      if (!examTargetId && resolvedSubjects[0]?.examTargetId) {
-        examTargetId = resolvedSubjects[0].examTargetId;
-        targetName = resolvedSubjects[0].examTarget?.name || targetName;
       }
 
       if (!title) {
@@ -596,13 +660,22 @@ export class ExamScheduleService {
 
         const subObj = await this.prisma.subject.findUnique({
           where: { id: group.subjectId },
-          include: { examTarget: true },
         });
         if (!subObj) {
           throw new NotFoundException(`Subject with ID '${group.subjectId}' not found.`);
         }
-        if (examTargetId && subObj.examTargetId && subObj.examTargetId !== examTargetId) {
-          throw new BadRequestException(`Subject '${subObj.name}' does not belong to the selected Exam Target.`);
+        if (examTargetId) {
+          const isAllowed = await this.prisma.examTargetSubject.findUnique({
+            where: {
+              examTargetId_subjectId: {
+                examTargetId,
+                subjectId: group.subjectId,
+              },
+            },
+          });
+          if (!isAllowed) {
+            throw new BadRequestException(`Subject '${subObj.name}' is not permitted for Exam Target '${targetName}'.`);
+          }
         }
 
         const chIds = group.chapterIds || [];
@@ -639,11 +712,6 @@ export class ExamScheduleService {
         });
       }
 
-      if (!examTargetId && resolvedSubjectGroups[0]?.subject?.examTargetId) {
-        examTargetId = resolvedSubjectGroups[0].subject.examTargetId;
-        targetName = resolvedSubjectGroups[0].subject.examTarget?.name || targetName;
-      }
-
       if (!title) {
         const parts = resolvedSubjectGroups.map(
           (g) => `${g.subject.name} (${g.chapters.map((c) => c.name).join(', ')})`,
@@ -657,19 +725,7 @@ export class ExamScheduleService {
         throw new BadRequestException('Duration in minutes must be greater than 0.');
       }
     } else {
-      // FULL_EXAM — JEE / NEET / CET (or legacy types)
-      if (!examTargetId) {
-        const targetSearch = dto.examTargetName || (examTypeUpper === 'FULL_EXAM' ? 'NEET' : examTypeUpper);
-        const matchedTarget = await this.prisma.examTarget.findFirst({
-          where: {
-            name: { contains: targetSearch === 'JEE_NEET_CET' ? 'NEET' : targetSearch, mode: 'insensitive' },
-          },
-        });
-        if (matchedTarget) {
-          examTargetId = matchedTarget.id;
-          targetName = matchedTarget.name;
-        }
-      }
+      // FULL_EXAM — JEE / NEET / CET
       if (!title) {
         title = `${targetName} Full Exam`;
       }
@@ -832,17 +888,18 @@ export class ExamScheduleService {
             });
           }
         } else {
-          // FULL_EXAM
-          const subjectsList = await tx.subject.findMany({
+          // FULL_EXAM (JEE / NEET / CET)
+          const targetSubjects = await tx.examTargetSubject.findMany({
             where: { examTargetId },
-            take: 4,
+            include: { subject: true },
+            orderBy: { displayOrder: 'asc' },
           });
-          const sectionQuestions = Math.floor(Number(totalQuestions) / (subjectsList.length || 1));
-          for (let i = 0; i < subjectsList.length; i++) {
+          const sectionQuestions = Math.floor(Number(totalQuestions) / (targetSubjects.length || 1));
+          for (let i = 0; i < targetSubjects.length; i++) {
             sectionRows.push({
               examId: exam.id,
-              subjectId: subjectsList[i].id,
-              name: `${subjectsList[i].name} Section`,
+              subjectId: targetSubjects[i].subjectId,
+              name: `${targetSubjects[i].subject.name} Section`,
               totalQuestions: sectionQuestions,
               displayOrder: i + 1,
             });
@@ -956,7 +1013,18 @@ export class ExamScheduleService {
         });
       }
 
-      // 6. Record AuditLog
+      // 6. Sync ExamCalendar
+      await this.syncToCalendar(
+        tx,
+        exam.id,
+        startTime,
+        endTime,
+        dto.timezone || 'Asia/Kolkata',
+        'CONFIRMED',
+        scheduledById,
+      );
+
+      // 7. Record AuditLog
       await tx.auditLog.create({
         data: {
           actorUserId: scheduledById,
@@ -1195,6 +1263,17 @@ export class ExamScheduleService {
           },
         },
       });
+
+      // Sync ExamCalendar on reschedule
+      await this.syncToCalendar(
+        tx,
+        schedule.examId,
+        newStartTime,
+        newEndTime,
+        dto.timezone || schedule.timezone,
+        'RESCHEDULED',
+        performedById,
+      );
 
       this.logger.log(
         `Schedule '${scheduleId}' rescheduled by user '${performedById}'`,
@@ -1552,5 +1631,74 @@ export class ExamScheduleService {
     });
 
     return { message: 'Exam successfully activated by Super Admin.' };
+  }
+
+  /**
+   * Helper to keep ExamCalendar synchronized whenever an exam schedule is created or updated
+   */
+  private async syncToCalendar(
+    tx: any,
+    examId: string,
+    startTime: Date,
+    endTime: Date,
+    timezone: string = 'Asia/Kolkata',
+    status: string = 'CONFIRMED',
+    userId?: string,
+  ) {
+    try {
+      const year = startTime.getFullYear();
+      const academicYear = `${year}-${year + 1}`;
+      let cycle = await tx.examCycle.findFirst({
+        where: { academicYear },
+      });
+      if (!cycle) {
+        cycle = await tx.examCycle.create({
+          data: {
+            name: `Academic Year ${academicYear}`,
+            academicYear,
+            startDate: new Date(`${year}-01-01T00:00:00.000Z`),
+            endDate: new Date(`${year}-12-31T23:59:59.999Z`),
+            status: 'ACTIVE',
+            createdById: userId || '00000000-0000-0000-0000-000000000000',
+          },
+        });
+      }
+
+      const dateStr = startTime.toISOString().split('T')[0];
+      const plannedDate = new Date(`${dateStr}T00:00:00.000Z`);
+
+      const existingCal = await tx.examCalendar.findFirst({
+        where: { examId },
+      });
+
+      if (existingCal) {
+        await tx.examCalendar.update({
+          where: { id: existingCal.id },
+          data: {
+            cycleId: cycle.id,
+            plannedDate,
+            plannedStartTime: startTime,
+            plannedEndTime: endTime,
+            timezone,
+            status: status as any,
+          },
+        });
+      } else {
+        await tx.examCalendar.create({
+          data: {
+            cycleId: cycle.id,
+            examId,
+            plannedDate,
+            plannedStartTime: startTime,
+            plannedEndTime: endTime,
+            timezone,
+            status: status as any,
+            scheduleVersion: 1,
+          },
+        });
+      }
+    } catch (err: any) {
+      this.logger.warn(`Failed to sync ExamCalendar (non-fatal): ${err.message}`);
+    }
   }
 }

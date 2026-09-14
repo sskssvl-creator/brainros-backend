@@ -40,7 +40,7 @@ export interface LanguageTranslationProgress {
   languageId: string;
   languageName: string;
   languageCode: string;
-  status: 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  status: 'QUEUED' | 'WAITING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
   completedQuestions: number;
   totalQuestions: number;
   failedBatches: number;
@@ -58,6 +58,7 @@ export interface AiTranslationJobDetails {
   batchSize: number;
   status: string;
   overallProgress: number;
+  dbSaveProgress?: number;
   languageStatuses: LanguageTranslationProgress[];
   startedAt?: Date | null;
   completedAt?: Date | null;

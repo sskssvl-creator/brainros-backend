@@ -34,6 +34,10 @@ export class ParsedQuestionItemDto {
   @IsString()
   @IsNotEmpty()
   optionD: string;
+
+  @IsString()
+  @IsOptional()
+  correctAnswer?: string;
 }
 
 export class UploadQuestionPaperDto {

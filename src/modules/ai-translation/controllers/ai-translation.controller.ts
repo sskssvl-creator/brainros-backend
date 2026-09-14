@@ -24,7 +24,7 @@ import {
 
 @Controller('ai-translations')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('SUPER_ADMIN')
+@Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER', 'OPERATOR')
 export class AiTranslationController {
   constructor(private readonly aiTranslationService: AiTranslationService) {}
 

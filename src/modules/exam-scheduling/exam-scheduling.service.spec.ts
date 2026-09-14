@@ -411,4 +411,91 @@ describe('Exam Scheduling & Activation Engine', () => {
       ).rejects.toThrow(ForbiddenException);
     });
   });
+
+  describe('5. Schedule Admin Exam Validation (Global Subjects & Target Mapping)', () => {
+    it('should reject JEE exam when Biology is selected', async () => {
+      mockPrismaService.examTarget = {
+        findUnique: jest.fn().mockResolvedValue({ id: 'target-jee', name: 'JEE' }),
+      };
+      mockPrismaService.examTargetSubject = {
+        findUnique: jest.fn().mockResolvedValue(null), // Disallowed
+      };
+      mockPrismaService.subject = {
+        findUnique: jest.fn().mockResolvedValue({ id: 'subj-bio', name: 'Biology' }),
+      };
+
+      await expect(
+        scheduleService.scheduleAdminExam(
+          {
+            examType: 'SPECIFIC_SUBJECT',
+            examTargetId: 'target-jee',
+            subjectId: 'subj-bio',
+            title: 'JEE Biology Test',
+            totalQuestions: 30,
+            durationMinutes: 60,
+            startTime: new Date(Date.now() + 3600000).toISOString(),
+          },
+          'admin-user',
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should reject NEET exam when Mathematics is selected', async () => {
+      mockPrismaService.examTarget = {
+        findUnique: jest.fn().mockResolvedValue({ id: 'target-neet', name: 'NEET' }),
+      };
+      mockPrismaService.examTargetSubject = {
+        findUnique: jest.fn().mockResolvedValue(null), // Disallowed
+      };
+      mockPrismaService.subject = {
+        findUnique: jest.fn().mockResolvedValue({ id: 'subj-math', name: 'Mathematics' }),
+      };
+
+      await expect(
+        scheduleService.scheduleAdminExam(
+          {
+            examType: 'SPECIFIC_SUBJECT',
+            examTargetId: 'target-neet',
+            subjectId: 'subj-math',
+            title: 'NEET Math Test',
+            totalQuestions: 30,
+            durationMinutes: 60,
+            startTime: new Date(Date.now() + 3600000).toISOString(),
+          },
+          'admin-user',
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should reject Specific Chapter exam when chapter does not belong to the selected subject', async () => {
+      mockPrismaService.examTarget = {
+        findUnique: jest.fn().mockResolvedValue({ id: 'target-jee', name: 'JEE' }),
+      };
+      mockPrismaService.examTargetSubject = {
+        findUnique: jest.fn().mockResolvedValue({ examTargetId: 'target-jee', subjectId: 'subj-phy' }),
+      };
+      mockPrismaService.subject = {
+        findUnique: jest.fn().mockResolvedValue({ id: 'subj-phy', name: 'Physics' }),
+      };
+      mockPrismaService.chapter = {
+        findUnique: jest.fn().mockResolvedValue({ id: 'chap-chem', subjectId: 'subj-chem', name: 'Thermodynamics' }), // Mismatch!
+      };
+
+      await expect(
+        scheduleService.scheduleAdminExam(
+          {
+            examType: 'SPECIFIC_CHAPTER',
+            examTargetId: 'target-jee',
+            subjectId: 'subj-phy',
+            chapterId: 'chap-chem',
+            title: 'JEE Physics Invalid Chapter Test',
+            totalQuestions: 30,
+            durationMinutes: 60,
+            startTime: new Date(Date.now() + 3600000).toISOString(),
+          },
+          'admin-user',
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+  });
 });

@@ -43,7 +43,7 @@ import { AiTranslationModule } from './modules/ai-translation/ai-translation.mod
     HealthModule,
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: '.env',
+      envFilePath: ['.env.production', '.env.local', '.env'],
     }),
     BullModule.forRootAsync({
       imports: [ConfigModule],
@@ -69,9 +69,11 @@ import { AiTranslationModule } from './modules/ai-translation/ai-translation.mod
               redisUrl.startsWith('rediss://') ||
               parsed.hostname.includes('upstash.io') ||
               parsed.hostname.includes('aivencloud.com');
+            const targetHost =
+              parsed.hostname === 'localhost' ? '127.0.0.1' : parsed.hostname;
             return {
               connection: {
-                host: parsed.hostname,
+                host: targetHost,
                 port: parseInt(parsed.port || '6379', 10),
                 username: parsed.username
                   ? decodeURIComponent(parsed.username)

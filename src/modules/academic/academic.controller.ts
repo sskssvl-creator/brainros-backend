@@ -67,8 +67,16 @@ export class AcademicController {
   }
 
   @Get('subjects')
-  findAllSubjects(@Query('examTargetId') examTargetId?: string) {
-    return this.academicService.findAllSubjects(examTargetId);
+  findAllSubjects(
+    @Query('examTargetId') examTargetId?: string,
+    @Query('examTargetName') examTargetName?: string,
+  ) {
+    return this.academicService.findAllSubjects(examTargetId, examTargetName);
+  }
+
+  @Get('exam-targets/:targetId/subjects')
+  findSubjectsByExamTarget(@Param('targetId') targetId: string) {
+    return this.academicService.findAllSubjects(targetId);
   }
 
   @Get('subjects/:id')

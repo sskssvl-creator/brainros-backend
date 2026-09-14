@@ -53,7 +53,7 @@ export class ExamPaperValidatorService {
     const [examTargets, subjects, languages] = await Promise.all([
       this.prisma.examTarget.findMany({ select: { id: true, name: true } }),
       this.prisma.subject.findMany({
-        select: { id: true, name: true, examTargetId: true },
+        select: { id: true, name: true },
       }),
       this.prisma.preferredLanguage.findMany({
         select: { id: true, code: true, name: true },

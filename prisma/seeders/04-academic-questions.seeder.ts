@@ -25,34 +25,23 @@ export async function seedAcademicQuestions(ctx: SeedContext): Promise<SeederRes
 
   const neetTarget = ctx.examTargets.get('NEET')!;
   const jeeTarget = ctx.examTargets.get('JEE') || ctx.examTargets.get('JEE_MAIN')!;
+  const cetTarget = ctx.examTargets.get('CET') || ctx.examTargets.get('STATE_CET');
 
-  // 1. Subjects Setup
-  const subjectsData = [
-    // NEET Subjects (Physics, Chemistry, Biology / Botany & Zoology)
-    { target: neetTarget, name: 'Physics (NEET)', code: 'NEET_PHY', displayOrder: 1 },
-    { target: neetTarget, name: 'Chemistry (NEET)', code: 'NEET_CHEM', displayOrder: 2 },
-    { target: neetTarget, name: 'Biology', code: 'NEET_BIO', displayOrder: 3 },
-    { target: neetTarget, name: 'Botany', code: 'NEET_BOT', displayOrder: 4 },
-    { target: neetTarget, name: 'Zoology', code: 'NEET_ZOO', displayOrder: 5 },
-    // Standalone / Base Subjects
-    { target: neetTarget, name: 'Physics', code: 'PHY', displayOrder: 6 },
-    { target: neetTarget, name: 'Chemistry', code: 'CHEM', displayOrder: 7 },
-    // JEE Subjects (Physics, Chemistry, Mathematics)
-    { target: jeeTarget, name: 'Physics (JEE)', code: 'JEE_PHY', displayOrder: 1 },
-    { target: jeeTarget, name: 'Chemistry (JEE)', code: 'JEE_CHEM', displayOrder: 2 },
-    { target: jeeTarget, name: 'Mathematics', code: 'JEE_MATH', displayOrder: 3 },
+  // 1. Global Subjects Setup
+  const globalSubjectsData = [
+    { name: 'Physics', code: 'PHY', displayOrder: 1 },
+    { name: 'Chemistry', code: 'CHEM', displayOrder: 2 },
+    { name: 'Mathematics', code: 'MATH', displayOrder: 3 },
+    { name: 'Biology', code: 'BIO', displayOrder: 4 },
   ];
 
-  for (const sData of subjectsData) {
-    let subject = await prisma.subject.findUnique({
-      where: {
-        examTargetId_name: { examTargetId: sData.target.id, name: sData.name },
-      },
+  for (const sData of globalSubjectsData) {
+    let subject = await prisma.subject.findFirst({
+      where: { name: sData.name },
     });
     if (!subject) {
       subject = await prisma.subject.create({
         data: {
-          examTargetId: sData.target.id,
           name: sData.name,
           code: sData.code,
           displayOrder: sData.displayOrder,
@@ -61,13 +50,61 @@ export async function seedAcademicQuestions(ctx: SeedContext): Promise<SeederRes
       });
       inc('subjects', true);
     } else {
+      subject = await prisma.subject.update({
+        where: { id: subject.id },
+        data: {
+          code: sData.code,
+          displayOrder: sData.displayOrder,
+          isActive: true,
+        },
+      });
       inc('subjects', false);
     }
-    ctx.subjects.set(`${sData.target.name}:${sData.name}`, subject);
     ctx.subjects.set(sData.name, subject);
+    // Legacy alias mappings for backwards compatibility in other seeders
+    ctx.subjects.set(`Physics (NEET)`, subject);
+    ctx.subjects.set(`Physics (JEE)`, subject);
+    ctx.subjects.set(`Chemistry (NEET)`, subject);
+    ctx.subjects.set(`Chemistry (JEE)`, subject);
+    ctx.subjects.set(`Botany`, subject);
+    ctx.subjects.set(`Zoology`, subject);
   }
 
-  // 2. Exact Master Chapter Data (20 Physics, 20 Chemistry, 10 Biology = 50 Chapters)
+  // 1.1 ExamTargetSubject Mappings
+  const targetSubjectMap: Array<{ target: any; subjectNames: string[] }> = [
+    { target: jeeTarget, subjectNames: ['Physics', 'Chemistry', 'Mathematics'] },
+    { target: neetTarget, subjectNames: ['Physics', 'Chemistry', 'Biology'] },
+  ];
+  if (cetTarget) {
+    targetSubjectMap.push({ target: cetTarget, subjectNames: ['Physics', 'Chemistry', 'Mathematics', 'Biology'] });
+  }
+
+  for (const mapping of targetSubjectMap) {
+    if (!mapping.target) continue;
+    let order = 1;
+    for (const subName of mapping.subjectNames) {
+      const sub = ctx.subjects.get(subName);
+      if (!sub) continue;
+      await prisma.examTargetSubject.upsert({
+        where: {
+          examTargetId_subjectId: {
+            examTargetId: mapping.target.id,
+            subjectId: sub.id,
+          },
+        },
+        create: {
+          examTargetId: mapping.target.id,
+          subjectId: sub.id,
+          displayOrder: order++,
+        },
+        update: {
+          displayOrder: order++,
+        },
+      });
+    }
+  }
+
+  // 2. Exact Master Chapter Data (20 Physics, 20 Chemistry, 10 Biology, 1 Mathematics = 51 Chapters)
   const physicsChapters = [
     { order: 1, name: 'Physics and Measurement', code: 'PHY_01', topics: [{ name: 'Units and Dimensions', subTopics: ['SI Units', 'Dimensional Analysis'] }] },
     { order: 2, name: 'Kinematics', code: 'PHY_02', topics: [{ name: 'Motion in 1D & 2D', subTopics: ['Uniform Acceleration', 'Projectile Motion'] }] },
@@ -133,9 +170,9 @@ export async function seedAcademicQuestions(ctx: SeedContext): Promise<SeederRes
 
   // Seed chapters across the master subjects
   const subjectChapterMappings: Array<{ subjectNames: string[]; chapterDefs: any[] }> = [
-    { subjectNames: ['Physics (NEET)', 'Physics (JEE)', 'Physics'], chapterDefs: physicsChapters },
-    { subjectNames: ['Chemistry (NEET)', 'Chemistry (JEE)', 'Chemistry'], chapterDefs: chemistryChapters },
-    { subjectNames: ['Biology', 'Botany', 'Zoology'], chapterDefs: biologyChapters },
+    { subjectNames: ['Physics'], chapterDefs: physicsChapters },
+    { subjectNames: ['Chemistry'], chapterDefs: chemistryChapters },
+    { subjectNames: ['Biology'], chapterDefs: biologyChapters },
     { subjectNames: ['Mathematics'], chapterDefs: mathChapters },
   ];
 

@@ -29,7 +29,7 @@ export class TwoFactorProvider implements ITwoFactorProvider {
     if (!authKey) {
       this.logger.error('MSG91 credentials missing.');
       throw new InternalServerErrorException(
-        'MSG91 provider configuration error.',
+        'SMS verification service is temporarily unavailable. Please try again later.',
       );
     }
     return authKey.trim();
@@ -117,7 +117,7 @@ export class TwoFactorProvider implements ITwoFactorProvider {
       if (!isSuccess) {
         this.logger.error(`MSG91 Send OTP failed: ${JSON.stringify(resData)}`);
         throw new BadRequestException(
-          resData.message || 'Failed to send OTP via MSG91.',
+          'Unable to send OTP. Please check your mobile number and try again.',
         );
       }
 

@@ -182,12 +182,10 @@ export class TwilioOtpService {
       return this.verifyServiceSid;
     } catch (err: any) {
       this.logger.error(
-        `Failed to resolve Twilio Verify Service: ${err?.message || err}`,
+        `Failed to resolve Twilio Verify Service: ${err?.message || err}. Ensure TWILIO_VERIFY_SERVICE_SID is configured in .env.`,
       );
       throw new InternalServerErrorException(
-        'TWILIO_VERIFY_SERVICE_SID is missing or invalid. ' +
-        'Please create a Verify Service in Twilio Console (Verify → Services) ' +
-        'and set TWILIO_VERIFY_SERVICE_SID=VAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx in your backend .env file.',
+        'SMS verification service is temporarily unavailable. Please try again later.',
       );
     }
   }

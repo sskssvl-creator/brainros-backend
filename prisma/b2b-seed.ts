@@ -67,19 +67,20 @@ async function main() {
   for (const s of cetSubjects) {
     const subj = await prisma.subject.upsert({
       where: {
-        examTargetId_name: {
-          examTargetId: cet.id,
-          name: s.name,
-        },
+        name: s.name,
       },
       update: {},
       create: {
-        examTargetId: cet.id,
         name: s.name,
         code: s.code,
         displayOrder: s.displayOrder,
         isActive: true,
       },
+    });
+    await prisma.examTargetSubject.upsert({
+      where: { examTargetId_subjectId: { examTargetId: cet.id, subjectId: subj.id } },
+      update: {},
+      create: { examTargetId: cet.id, subjectId: subj.id },
     });
     console.log(`✅ CET Subject ensured: ${subj.name} (${subj.code})`);
   }

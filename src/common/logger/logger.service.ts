@@ -51,10 +51,10 @@ export class AppLoggerService implements LoggerService {
   private contextName = 'Application';
 
   constructor() {
-    const isProduction = process.env.NODE_ENV === 'production';
+    const useJson = process.env.LOG_FORMAT === 'json';
     const level = getLogLevel();
 
-    if (isProduction) {
+    if (useJson) {
       this.pinoLogger = pino(
         {
           level,
@@ -87,7 +87,7 @@ export class AppLoggerService implements LoggerService {
         pino.destination({ sync: true }),
       );
     } else {
-      // In development: use synchronous pino-pretty stream on main thread for instant log visibility
+      // Use synchronous pino-pretty stream for clean human-readable log visibility
       try {
         const prettyStream = require('pino-pretty')({
           colorize: true,

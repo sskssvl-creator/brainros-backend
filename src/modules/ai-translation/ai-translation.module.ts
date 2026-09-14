@@ -12,7 +12,8 @@ import { AiTranslationFileParserService } from './services/ai-translation-file-p
 import { AiTranslationValidatorService } from './services/ai-translation-validator.service';
 import { GeminiTranslationService } from './services/gemini-translation.service';
 import { AiTranslationParentProcessor } from './processors/ai-translation-parent.processor';
-import { AiTranslationLanguageProcessor } from './processors/ai-translation-language.processor';
+
+import { GeminiRateLimiterService } from './services/gemini-rate-limiter.service';
 
 @Module({
   imports: [
@@ -32,10 +33,10 @@ import { AiTranslationLanguageProcessor } from './processors/ai-translation-lang
     AiTranslationService,
     AiTranslationFileParserService,
     AiTranslationValidatorService,
+    GeminiRateLimiterService,
     GeminiTranslationService,
     AiTranslationParentProcessor,
-    AiTranslationLanguageProcessor,
   ],
-  exports: [AiTranslationService],
+  exports: [AiTranslationService, GeminiRateLimiterService],
 })
 export class AiTranslationModule {}

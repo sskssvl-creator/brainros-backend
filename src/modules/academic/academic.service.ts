@@ -37,31 +37,22 @@ export class AcademicService {
   // ═══════════════════════════════════════════════════════════════
 
   async createSubject(dto: CreateSubjectDto, actorUserId?: string) {
-    const examTarget = await this.prisma.examTarget.findUnique({
-      where: { id: dto.examTargetId },
-    });
-    if (!examTarget) {
-      throw new NotFoundException(`Target Exam with ID '${dto.examTargetId}' does not exist.`);
-    }
-
     const trimmedName = dto.name.trim();
     const existing = await this.prisma.subject.findFirst({
       where: {
-        examTargetId: dto.examTargetId,
         name: { equals: trimmedName, mode: 'insensitive' },
       },
     });
 
     if (existing) {
       throw new ConflictException(
-        `A subject with the name "${trimmedName}" already exists for ${examTarget.name}.`,
+        `A subject with the name "${trimmedName}" already exists.`,
       );
     }
 
     let displayOrder = dto.displayOrder;
     if (displayOrder === undefined || displayOrder === null) {
       const maxOrder = await this.prisma.subject.aggregate({
-        where: { examTargetId: dto.examTargetId },
         _max: { displayOrder: true },
       });
       displayOrder = (maxOrder._max.displayOrder || 0) + 1;
@@ -69,13 +60,28 @@ export class AcademicService {
 
     const subject = await this.prisma.subject.create({
       data: {
-        examTargetId: dto.examTargetId,
         name: trimmedName,
         code: dto.code?.trim() || null,
         displayOrder,
       },
-      include: { examTarget: { select: { id: true, name: true } } },
     });
+
+    if (dto.examTargetId) {
+      await this.prisma.examTargetSubject.upsert({
+        where: {
+          examTargetId_subjectId: {
+            examTargetId: dto.examTargetId,
+            subjectId: subject.id,
+          },
+        },
+        create: {
+          examTargetId: dto.examTargetId,
+          subjectId: subject.id,
+          displayOrder,
+        },
+        update: {},
+      });
+    }
 
     await this.auditLogService.logAction({
       actorUserId: actorUserId || null,
@@ -83,17 +89,35 @@ export class AcademicService {
       entityType: 'Subject',
       entityId: subject.id,
       afterState: subject,
-      metadata: { examTargetId: dto.examTargetId, examTargetName: examTarget.name, name: subject.name },
+      metadata: { examTargetId: dto.examTargetId, name: subject.name },
     });
 
     return subject;
   }
 
-  async findAllSubjects(examTargetId?: string) {
+  async findAllSubjects(examTargetId?: string, examTargetName?: string) {
+    const hasTargetFilter = !!(examTargetId || examTargetName);
+
     return this.prisma.subject.findMany({
-      where: examTargetId ? { examTargetId } : undefined,
+      where: hasTargetFilter
+        ? {
+            examTargetSubjects: {
+              some: {
+                OR: [
+                  ...(examTargetId ? [{ examTargetId }] : []),
+                  ...(examTargetName
+                    ? [{ examTarget: { name: { contains: examTargetName, mode: 'insensitive' as const } } }]
+                    : []),
+                ],
+              },
+            },
+          }
+        : undefined,
       include: {
-        examTarget: { select: { id: true, name: true } },
+        examTargetSubjects: {
+          include: { examTarget: { select: { id: true, name: true } } },
+          orderBy: { displayOrder: 'asc' },
+        },
         _count: { select: { chapters: true, questions: true } },
       },
       orderBy: { displayOrder: 'asc' },
@@ -104,7 +128,9 @@ export class AcademicService {
     const subject = await this.prisma.subject.findUnique({
       where: { id },
       include: {
-        examTarget: { select: { id: true, name: true } },
+        examTargetSubjects: {
+          include: { examTarget: { select: { id: true, name: true } } },
+        },
         chapters: {
           where: { isActive: true },
           orderBy: { displayOrder: 'asc' },
@@ -122,7 +148,11 @@ export class AcademicService {
     return this.prisma.subject.update({
       where: { id },
       data: dto,
-      include: { examTarget: { select: { id: true, name: true } } },
+      include: {
+        examTargetSubjects: {
+          include: { examTarget: { select: { id: true, name: true } } },
+        },
+      },
     });
   }
 
@@ -200,7 +230,9 @@ export class AcademicService {
                 id: true,
                 name: true,
                 code: true,
-                examTarget: { select: { id: true, name: true } },
+                examTargetSubjects: {
+                  include: { examTarget: { select: { id: true, name: true } } },
+                },
               },
             },
             _count: { select: { topics: true, questions: true } },
@@ -231,7 +263,9 @@ export class AcademicService {
             id: true,
             name: true,
             code: true,
-            examTarget: { select: { id: true, name: true } },
+            examTargetSubjects: {
+              include: { examTarget: { select: { id: true, name: true } } },
+            },
           },
         },
         _count: { select: { topics: true, questions: true } },
@@ -306,7 +340,9 @@ export class AcademicService {
             id: true,
             name: true,
             code: true,
-            examTarget: { select: { id: true, name: true } },
+            examTargetSubjects: {
+              include: { examTarget: { select: { id: true, name: true } } },
+            },
           },
         },
         topics: {
@@ -686,6 +722,12 @@ export class AcademicService {
       where: {
         name: { in: ['JEE', 'NEET', 'CET'], mode: 'insensitive' },
       },
+      include: {
+        examTargetSubjects: {
+          include: { subject: true },
+          orderBy: { displayOrder: 'asc' },
+        },
+      },
       orderBy: { name: 'asc' },
     });
   }
@@ -694,28 +736,38 @@ export class AcademicService {
    * Returns the entire academic hierarchy for a given exam target as a tree
    */
   async getHierarchy(examTargetId: string) {
-    const subjects = await this.prisma.subject.findMany({
-      where: { examTargetId, isActive: true },
-      orderBy: { displayOrder: 'asc' },
+    const target = await this.prisma.examTarget.findUnique({
+      where: { id: examTargetId },
       include: {
-        chapters: {
-          where: { isActive: true },
-          orderBy: { displayOrder: 'asc' },
+        examTargetSubjects: {
           include: {
-            topics: {
-              where: { isActive: true },
-              orderBy: { displayOrder: 'asc' },
+            subject: {
               include: {
-                subTopics: {
+                chapters: {
                   where: { isActive: true },
                   orderBy: { displayOrder: 'asc' },
+                  include: {
+                    topics: {
+                      where: { isActive: true },
+                      orderBy: { displayOrder: 'asc' },
+                      include: {
+                        subTopics: {
+                          where: { isActive: true },
+                          orderBy: { displayOrder: 'asc' },
+                        },
+                      },
+                    },
+                  },
                 },
               },
             },
           },
+          orderBy: { displayOrder: 'asc' },
         },
       },
     });
-    return subjects;
+
+    if (!target) return [];
+    return target.examTargetSubjects.map((ets) => ets.subject);
   }
 }

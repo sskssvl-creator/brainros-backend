@@ -25,7 +25,7 @@ export interface AiTranslationLanguageJobData {
 }
 
 @Processor(AI_TRANSLATION_LANGUAGE_QUEUE, {
-  concurrency: 2,
+  concurrency: 1,
 })
 export class AiTranslationLanguageProcessor extends WorkerHost {
   private readonly logger = new Logger(AiTranslationLanguageProcessor.name);
@@ -100,7 +100,31 @@ export class AiTranslationLanguageProcessor extends WorkerHost {
     for (let i = 0; i < evQuestions.length; i += batchSize) {
       const batchSlice = evQuestions.slice(i, i + batchSize);
 
-      const batchItems: QuestionBatchItem[] = batchSlice.map((evq) => {
+      // ── IDEMPOTENCY CHECK: Check if this batch is already translated in DB ──
+      const batchQIds = batchSlice.map((q) => q.id);
+      const existingTranslations = await this.prisma.examVersionTranslation.findMany({
+        where: {
+          examVersionQuestionId: { in: batchQIds },
+          languageId,
+        },
+      });
+
+      const existingQIdSet = new Set(existingTranslations.map((t) => t.examVersionQuestionId));
+      const untranslatedSlice = batchSlice.filter((evq) => !existingQIdSet.has(evq.id));
+
+      if (untranslatedSlice.length === 0) {
+        this.logger.log(
+          `[Idempotency] Batch of ${batchSlice.length} questions for ${languageName} already translated in DB. Skipping AI call.`,
+        );
+        completedQuestions += batchSlice.length;
+        await this.updateLanguageStatus(jobId, languageId, {
+          status: 'PROCESSING',
+          completedQuestions,
+        });
+        continue;
+      }
+
+      const batchItems: QuestionBatchItem[] = untranslatedSlice.map((evq) => {
         const optA = evq.options.find((o) => o.optionKey === 'A')?.optionText || '';
         const optB = evq.options.find((o) => o.optionKey === 'B')?.optionText || '';
         const optC = evq.options.find((o) => o.optionKey === 'C')?.optionText || '';
@@ -131,7 +155,7 @@ export class AiTranslationLanguageProcessor extends WorkerHost {
 
         // Upsert translations into DB transaction
         await this.prisma.$transaction(async (tx) => {
-          for (const evq of batchSlice) {
+          for (const evq of untranslatedSlice) {
             const tr = transMap.get(evq.sequenceNumber);
             if (!tr) continue;
 
@@ -254,14 +278,14 @@ export class AiTranslationLanguageProcessor extends WorkerHost {
         this.logger.error(
           `Error translating batch in ${languageName} for Job ${jobId}: ${batchErr.message}`,
         );
+        break;
       }
     }
 
-    // 4. Finalize Language Status
-    const finalStatus =
-      failedBatches > 0 && completedQuestions === 0
-        ? 'FAILED'
-        : 'COMPLETED';
+    // 4. Finalize Language Status - STRICT INTEGRITY
+    const isFullyCompleted =
+      completedQuestions === totalQuestions && failedBatches === 0;
+    const finalStatus = isFullyCompleted ? 'COMPLETED' : 'FAILED';
 
     await this.updateLanguageStatus(jobId, languageId, {
       status: finalStatus,
@@ -271,6 +295,12 @@ export class AiTranslationLanguageProcessor extends WorkerHost {
 
     // 5. Evaluate Overall Job Completion
     await this.evaluateJobCompletion(jobId, userId, examId);
+
+    if (!isFullyCompleted) {
+      throw new Error(
+        `Language translation incomplete for ${languageName}: ${completedQuestions}/${totalQuestions} completed, ${failedBatches} batches failed.`,
+      );
+    }
   }
 
   private async updateLanguageStatus(
