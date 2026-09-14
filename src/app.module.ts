@@ -65,6 +65,10 @@ import { AiTranslationModule } from './modules/ai-translation/ai-translation.mod
         if (redisUrl) {
           try {
             const parsed = new URL(redisUrl);
+            const isTls =
+              redisUrl.startsWith('rediss://') ||
+              parsed.hostname.includes('upstash.io') ||
+              parsed.hostname.includes('aivencloud.com');
             return {
               connection: {
                 host: parsed.hostname,
@@ -75,9 +79,7 @@ import { AiTranslationModule } from './modules/ai-translation/ai-translation.mod
                 password: parsed.password
                   ? decodeURIComponent(parsed.password)
                   : undefined,
-                tls: redisUrl.startsWith('rediss://')
-                  ? { rejectUnauthorized: false }
-                  : undefined,
+                tls: isTls ? { rejectUnauthorized: false } : undefined,
                 // Do not block startup — connect lazily
                 lazyConnect: true,
                 // Fail fast if Redis is down; don't queue commands during outage

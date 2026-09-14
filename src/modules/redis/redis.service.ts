@@ -73,11 +73,14 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
     try {
       if (redisUrl) {
-        this.redisClient = new Redis(redisUrl, {
+        const isTls = redisUrl.startsWith('rediss://') || redisUrl.includes('.upstash.io') || redisUrl.includes('.aivencloud.com');
+        const effectiveUrl = (isTls && redisUrl.startsWith('redis://'))
+          ? redisUrl.replace(/^redis:\/\//, 'rediss://')
+          : redisUrl;
+
+        this.redisClient = new Redis(effectiveUrl, {
           ...commonOptions,
-          tls: redisUrl.startsWith('rediss://')
-            ? { rejectUnauthorized: false }
-            : undefined,
+          tls: isTls ? { rejectUnauthorized: false } : undefined,
         });
       } else {
         const host = this.configService.get<string>('REDIS_HOST') || 'localhost';
