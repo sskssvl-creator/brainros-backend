@@ -44,7 +44,7 @@ export class AdminStudentsQueryDto {
   @IsInt()
   @Min(1)
   @Max(100)
-  pageSize?: number = 20;
+  pageSize?: number = 10;
 
   @IsOptional()
   @Type(() => Number)
@@ -110,7 +110,7 @@ export class SuperAdminRegistrationsQueryDto {
   @IsInt()
   @Min(1)
   @Max(100)
-  pageSize?: number = 20;
+  pageSize?: number = 10;
 
   @IsOptional()
   @IsString()

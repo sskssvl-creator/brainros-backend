@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Param,
+  Query,
   UseGuards,
   HttpStatus,
 } from '@nestjs/common';
@@ -27,9 +28,18 @@ export class ExamPublicationController {
    */
   @Get('admin/exams/results/publication-dashboard')
   @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER')
-  async getPublicationDashboard() {
-    const data =
-      await this.publicationService.getLiveExamsPublicationDashboard();
+  async getPublicationDashboard(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+  ) {
+    const data = await this.publicationService.getLiveExamsPublicationDashboard({
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 10,
+      search,
+      status,
+    });
     return {
       statusCode: HttpStatus.OK,
       message: 'Publication dashboard retrieved successfully',

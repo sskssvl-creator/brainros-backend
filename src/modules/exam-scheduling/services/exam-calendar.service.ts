@@ -443,8 +443,8 @@ export class ExamCalendarService {
   // ─────────────────────────────────────────────────────────────────────────────
 
   async getCalendarEvents(filter: CalendarFilterDto) {
-    const page = filter.page || 1;
-    const limit = filter.limit || 200;
+    const page = filter.page ? Math.max(1, Number(filter.page)) : 1;
+    const limit = filter.limit ? Math.min(500, Math.max(1, Number(filter.limit))) : 10;
     const skip = (page - 1) * limit;
 
     const where: any = {};
@@ -498,7 +498,8 @@ export class ExamCalendarService {
         total,
         page,
         limit,
-        pages: Math.ceil(total / limit),
+        pages: Math.ceil(total / limit) || 1,
+        totalPages: Math.ceil(total / limit) || 1,
       },
     };
   }

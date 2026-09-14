@@ -320,7 +320,7 @@ export class BulkUploadService {
   /**
    * List all uploads for an institution.
    */
-  async listUploads(institutionId: string, page = 1, limit = 20) {
+  async listUploads(institutionId: string, page = 1, limit = 10) {
     const skip = (page - 1) * limit;
 
     const [uploads, total] = await Promise.all([

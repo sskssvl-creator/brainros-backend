@@ -123,7 +123,7 @@ export class AdminStudentBulkController {
   async getUploadPreview(
     @Param('id') uploadId: string,
     @Query('page') page = 1,
-    @Query('limit') limit = 20,
+    @Query('limit') limit = 10,
     @Query('filterStatus') filterStatus?: 'ALL' | 'VALID' | 'INVALID',
   ) {
     return this.bulkRegistrationService.getUploadPreview(

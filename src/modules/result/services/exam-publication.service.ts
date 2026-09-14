@@ -27,6 +27,7 @@ import {
   NotificationPriority,
   NotificationStatus,
   NotificationType,
+  Prisma,
 } from '@prisma/client';
 import { normalizeToWhatsApp, maskPhone } from '../../notification/utils/phone-normalizer.util';
 
@@ -47,53 +48,202 @@ export class ExamPublicationService {
   /**
    * Get all live exams with their publication status and readiness metrics.
    */
-  async getLiveExamsPublicationDashboard() {
-    const exams = await this.prisma.exam.findMany({
-      include: {
-        examTarget: { select: { id: true, name: true } },
-        status: { select: { id: true, name: true } },
-        schedules: {
-          orderBy: { createdAt: 'desc' },
-          take: 1,
-        },
-        resultPublications: {
-          orderBy: { publicationVersion: 'desc' },
-          take: 1,
-          include: {
-            publishedBy: { select: { id: true, email: true, phone: true } },
+  async getLiveExamsPublicationDashboard(query?: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    status?: string;
+  }) {
+    const page = query?.page ? Math.max(1, Number(query.page)) : 1;
+    const limit = query?.limit ? Math.min(Math.max(1, Number(query.limit)), 100) : 10;
+    const skip = (page - 1) * limit;
+
+    const where: any = {};
+
+    if (query?.search && query.search.trim()) {
+      where.OR = [
+        { title: { contains: query.search.trim(), mode: 'insensitive' } },
+        { examTarget: { name: { contains: query.search.trim(), mode: 'insensitive' } } },
+      ];
+    }
+
+    if (query?.status && query.status !== 'ALL') {
+      if (query.status === 'PUBLISHED') {
+        where.resultPublications = { some: {} };
+      }
+    }
+
+    // 1. Fetch paginated exams and total count
+    const [exams, totalCount, allExamsCount] = await Promise.all([
+      this.prisma.exam.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          examTarget: { select: { id: true, name: true } },
+          status: { select: { id: true, name: true } },
+          schedules: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: {
+              id: true,
+              startTime: true,
+              endTime: true,
+              status: true,
+            },
+          },
+          resultPublications: {
+            orderBy: { publicationVersion: 'desc' },
+            take: 1,
+            include: {
+              publishedBy: { select: { id: true, email: true, phone: true } },
+            },
+          },
+          _count: {
+            select: { attempts: true },
           },
         },
-        _count: {
-          select: { attempts: true },
-        },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+      }),
+      this.prisma.exam.count({ where }),
+      this.prisma.exam.count(),
+    ]);
 
-    const results: any[] = [];
+    const examIds = exams.map((e) => e.id);
 
-    for (const exam of exams) {
-      const isLive = await this.readinessService.isLiveExam(exam.id);
-      if (!isLive && exam._count.attempts === 0) continue;
+    // 2. Batch aggregation for attempts in the current page's exams
+    let attemptStats: Array<{
+      exam_id: string;
+      total_eligible: number;
+      finalized: number;
+      evaluated: number;
+      analytics_completed: number;
+      pending_security: number;
+    }> = [];
 
-      const readiness = await this.readinessService.checkExamReadiness(exam.id);
+    if (examIds.length > 0) {
+      try {
+        attemptStats = await this.prisma.$queryRaw<any[]>`
+          SELECT
+            a.exam_id,
+            COUNT(a.id)::int AS total_eligible,
+            COUNT(CASE WHEN ast.name IN ('SUBMITTED', 'AUTO_SUBMITTED') THEN 1 END)::int AS finalized,
+            COUNT(CASE WHEN ast.name IN ('SUBMITTED', 'AUTO_SUBMITTED') AND r.id IS NOT NULL THEN 1 END)::int AS evaluated,
+            COUNT(CASE WHEN ast.name IN ('SUBMITTED', 'AUTO_SUBMITTED') AND ta.id IS NOT NULL AND sa.id IS NOT NULL THEN 1 END)::int AS analytics_completed,
+            COUNT(CASE WHEN sr.status = 'PENDING' THEN 1 END)::int AS pending_security
+          FROM attempts a
+          JOIN attempt_statuses ast ON ast.id = a.status_id
+          LEFT JOIN results r ON r.attempt_id = a.id
+          LEFT JOIN LATERAL (SELECT id FROM time_analyses WHERE attempt_id = a.id LIMIT 1) ta ON true
+          LEFT JOIN LATERAL (SELECT id FROM strategy_analyses WHERE attempt_id = a.id LIMIT 1) sa ON true
+          LEFT JOIN attempt_security_reviews sr ON sr.attempt_id = a.id AND sr.status = 'PENDING'
+          WHERE a.exam_id IN (${Prisma.join(examIds.map((id) => Prisma.raw(`'${id}'::uuid`)))})
+            AND ast.name NOT IN ('CANCELLED', 'NOT_STARTED')
+          GROUP BY a.exam_id
+        `;
+      } catch (err) {
+        this.logger.warn(`Aggregated attempt stats query error: ${err?.message}`);
+      }
+    }
+
+    const statsMap = new Map<string, any>();
+    for (const stat of attemptStats) {
+      statsMap.set(stat.exam_id, stat);
+    }
+
+    // 3. Batch check rank snapshots for current page exams
+    let rankSnapshots: any[] = [];
+    if (examIds.length > 0) {
+      try {
+        rankSnapshots = await this.prisma.rankSnapshot.findMany({
+          where: { examId: { in: examIds } },
+          orderBy: { snapshotVersion: 'desc' },
+          distinct: ['examId'],
+          select: { examId: true, status: true },
+        });
+      } catch (err) {
+        this.logger.warn(`Rank snapshot batch query error: ${err?.message}`);
+      }
+    }
+    const rankMap = new Map<string, string>();
+    for (const r of rankSnapshots) {
+      rankMap.set(r.examId, r.status);
+    }
+
+    const items = exams.map((exam) => {
+      const titleUpper = (exam.title || '').toUpperCase();
+      const isMockOrPractice = titleUpper.includes('MOCK') || titleUpper.includes('PRACTICE');
+      const hasSchedules = exam.schedules && exam.schedules.length > 0;
+      const titleIndicatesLive = titleUpper.includes('LIVE');
+      const isLive = !isMockOrPractice && Boolean(hasSchedules || titleIndicatesLive);
+
+      const stats = statsMap.get(exam.id) || {
+        total_eligible: 0,
+        finalized: 0,
+        evaluated: 0,
+        analytics_completed: 0,
+        pending_security: 0,
+      };
+
+      const totalEligible = Number(stats.total_eligible || 0);
+      const finalized = Number(stats.finalized || 0);
+      const evaluated = Number(stats.evaluated || 0);
+      const analyticsCompleted = Number(stats.analytics_completed || 0);
+      const pendingSecurity = Number(stats.pending_security || 0);
+
+      const rankingCompleted = rankMap.get(exam.id) === 'COMPLETED';
+      const securityReviewCompleted = pendingSecurity === 0;
+
       const latestPub = exam.resultPublications?.[0];
+      const isPublished = Boolean(latestPub);
 
-      results.push({
+      // Determine readiness
+      let isReadyToPublish = false;
+      let notReadyReason: string | null = null;
+      let publicationStatus: 'READY_TO_PUBLISH' | 'PUBLISHED' | 'PROCESSING' | 'NOT_READY' =
+        'NOT_READY';
+
+      if (isPublished) {
+        publicationStatus = 'PUBLISHED';
+      } else if (
+        totalEligible > 0 &&
+        finalized === totalEligible &&
+        evaluated === finalized &&
+        rankingCompleted &&
+        securityReviewCompleted
+      ) {
+        isReadyToPublish = true;
+        publicationStatus = 'READY_TO_PUBLISH';
+      } else if (totalEligible > 0) {
+        publicationStatus = 'PROCESSING';
+        if (finalized < totalEligible) {
+          notReadyReason = `${totalEligible - finalized} attempt(s) pending finalization.`;
+        } else if (evaluated < finalized) {
+          notReadyReason = `${finalized - evaluated} attempt(s) pending evaluation.`;
+        } else if (!rankingCompleted) {
+          notReadyReason = 'Rank snapshot pending.';
+        } else if (!securityReviewCompleted) {
+          notReadyReason = `${pendingSecurity} security review(s) pending.`;
+        }
+      } else {
+        notReadyReason = 'No candidate attempts found.';
+      }
+
+      return {
         examId: exam.id,
         examTitle: exam.title,
         examTarget: exam.examTarget?.name || 'General',
         examStatus: exam.status?.name,
         examType: isLive ? 'LIVE' : 'MOCK',
-        totalCandidates: readiness.totalEligibleAttempts,
-        finalizedAttempts: readiness.finalizedAttempts,
-        evaluatedAttempts: readiness.evaluatedAttempts,
-        analyticsCompletedAttempts: readiness.analyticsCompletedAttempts,
-        rankingCompleted: readiness.rankingCompleted,
-        securityReviewCompleted: readiness.securityReviewCompleted,
-        publicationStatus: readiness.publicationStatus,
-        isReadyToPublish: readiness.ready,
-        notReadyReason: readiness.reason,
+        totalCandidates: totalEligible,
+        finalizedAttempts: finalized,
+        evaluatedAttempts: evaluated,
+        analyticsCompletedAttempts: analyticsCompleted,
+        rankingCompleted,
+        securityReviewCompleted,
+        publicationStatus,
+        isReadyToPublish,
+        notReadyReason,
         publishedAt: latestPub?.publishedAt || null,
         publishedBy: latestPub?.publishedBy?.email || null,
         publicationVersion: latestPub?.publicationVersion || 1,
@@ -104,10 +254,21 @@ export class ExamPublicationService {
               status: exam.schedules[0].status,
             }
           : null,
-      });
-    }
+      };
+    });
 
-    return results;
+    return {
+      items,
+      summary: {
+        totalMonitored: allExamsCount,
+      },
+      pagination: {
+        total: totalCount,
+        page,
+        limit,
+        totalPages: Math.ceil(totalCount / limit) || 1,
+      },
+    };
   }
 
   /**

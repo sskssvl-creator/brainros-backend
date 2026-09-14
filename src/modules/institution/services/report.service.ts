@@ -140,7 +140,7 @@ export class ReportService {
   /**
    * List all report jobs for an institution.
    */
-  async listReports(institutionId: string, page = 1, limit = 20) {
+  async listReports(institutionId: string, page = 1, limit = 10) {
     const skip = (page - 1) * limit;
 
     const [reports, total] = await Promise.all([

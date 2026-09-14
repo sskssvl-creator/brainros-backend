@@ -72,7 +72,7 @@ export class InstitutionService {
    */
   async findAll(query: InstitutionQueryDto) {
     const page = query.page || 1;
-    const limit = query.limit || 20;
+    const limit = query.limit || 10;
     const skip = (page - 1) * limit;
 
     const where: any = {};

@@ -1278,7 +1278,7 @@ export class BillingService {
    */
   async listBills(filter: BillFilterDto, userId: string, userRoles: string[]) {
     const page = Number(filter.page) || 1;
-    const limit = Number(filter.limit) || 20;
+    const limit = Number(filter.limit) || 10;
     const skip = (page - 1) * limit;
 
     const includeUnbilled = String(filter.includeUnbilled) === 'true' || filter.includeUnbilled === true;

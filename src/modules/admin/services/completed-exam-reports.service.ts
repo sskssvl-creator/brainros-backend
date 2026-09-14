@@ -258,7 +258,7 @@ export class CompletedExamReportsService {
       sortBy = 'submittedAt',
       sortOrder = 'desc',
       page = 1,
-      limit = 20,
+      limit = 10,
     } = query;
 
     const skip = (Math.max(1, page) - 1) * Math.min(100, Math.max(1, limit));

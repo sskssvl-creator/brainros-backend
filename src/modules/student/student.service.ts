@@ -548,7 +548,7 @@ export class StudentService {
     );
 
     const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.max(1, Math.min(50, Number(query.limit) || 12));
+    const limit = Math.max(1, Math.min(50, Number(query.limit) || 10));
     const skip = (page - 1) * limit;
     const now = new Date();
 
@@ -820,7 +820,7 @@ export class StudentService {
     );
 
     const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.max(1, Math.min(50, Number(query.limit) || 12));
+    const limit = Math.max(1, Math.min(50, Number(query.limit) || 10));
     const skip = (page - 1) * limit;
 
     // Base criteria: Approved, non-draft mock exams
@@ -1034,7 +1034,7 @@ export class StudentService {
     }
 
     const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.max(1, Math.min(50, Number(query.limit) || 12));
+    const limit = Math.max(1, Math.min(50, Number(query.limit) || 10));
     const skip = (page - 1) * limit;
 
     const where: any = {

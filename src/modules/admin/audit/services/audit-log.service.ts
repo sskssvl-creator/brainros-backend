@@ -67,7 +67,7 @@ export class AuditLogService {
    */
   async getAuditLogs(filter: AuditLogFilterDto) {
     const page = filter.page || 1;
-    const limit = filter.limit || 20;
+    const limit = filter.limit || 10;
     const skip = (page - 1) * limit;
 
     const where: any = {};

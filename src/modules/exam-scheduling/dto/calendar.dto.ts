@@ -171,14 +171,14 @@ export class CalendarFilterDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  page?: number;
+  page?: number = 1;
 
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(500)
-  limit?: number;
+  limit?: number = 10;
 }
 
 export class SetFeatureActivationDto {

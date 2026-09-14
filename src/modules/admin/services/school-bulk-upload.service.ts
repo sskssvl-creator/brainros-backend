@@ -377,7 +377,7 @@ export class SchoolBulkUploadService {
   async getUploadPreview(
     uploadId: string,
     page = 1,
-    limit = 20,
+    limit = 10,
     filterStatus?: 'ALL' | 'VALID' | 'INVALID',
   ) {
     const upload = await this.prisma.bulkUpload.findUnique({

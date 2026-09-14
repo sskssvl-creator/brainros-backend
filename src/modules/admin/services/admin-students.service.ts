@@ -25,7 +25,7 @@ export class AdminStudentsService {
    */
   async getStudents(query: AdminStudentsQueryDto, actorUserId: string) {
     const page = Math.max(1, Number(query.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(query.pageSize || query.limit) || 20));
+    const pageSize = Math.min(100, Math.max(1, Number(query.pageSize || query.limit) || 10));
     const skip = (page - 1) * pageSize;
 
     // 1. RBAC & Institution Scope Evaluation
@@ -467,7 +467,7 @@ export class AdminStudentsService {
    */
   async getSuperAdminRegistrations(query: SuperAdminRegistrationsQueryDto) {
     const page = Math.max(1, Number(query.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
+    const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 10));
     const skip = (page - 1) * pageSize;
 
     const where = this.buildSuperAdminRegistrationWhere(query);
@@ -1254,7 +1254,7 @@ export class AdminStudentsService {
    */
   async getPublicRegistrations(query: SuperAdminRegistrationsQueryDto) {
     const page = Math.max(1, Number(query.page) || 1);
-    const pageSize = Math.max(1, Math.min(100, Number(query.pageSize) || 20));
+    const pageSize = Math.max(1, Math.min(100, Number(query.pageSize) || 10));
     const skip = (page - 1) * pageSize;
 
     const where: Prisma.StudentWhereInput = {

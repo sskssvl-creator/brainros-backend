@@ -807,7 +807,7 @@ export class StudentBulkRegistrationService {
   async getUploadPreview(
     uploadId: string,
     page = 1,
-    limit = 20,
+    limit = 10,
     filterStatus?: 'ALL' | 'VALID' | 'INVALID',
   ) {
     const upload = await this.prisma.bulkUpload.findUnique({
@@ -892,7 +892,7 @@ export class StudentBulkRegistrationService {
   /**
    * Retrieves list of Super Admin bulk student uploads history
    */
-  async getUploadHistory(page = 1, limit = 20, status?: string) {
+  async getUploadHistory(page = 1, limit = 10, status?: string) {
     const where: any = { uploadType: 'SUPER_ADMIN_STUDENTS' };
     if (status && status !== 'ALL') {
       where.status = status;

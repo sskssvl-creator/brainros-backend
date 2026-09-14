@@ -351,7 +351,7 @@ export class NotificationService {
    */
   async getNotifications(filter: NotificationFilterDto) {
     const page = filter.page || 1;
-    const limit = filter.limit || 20;
+    const limit = filter.limit || 10;
     const skip = (page - 1) * limit;
 
     const where: any = {};
@@ -394,7 +394,7 @@ export class NotificationService {
     query: { page?: number; limit?: number; unreadOnly?: boolean },
   ) {
     const page = query.page && query.page > 0 ? query.page : 1;
-    const limit = query.limit && query.limit > 0 ? Math.min(query.limit, 100) : 20;
+    const limit = query.limit && query.limit > 0 ? Math.min(query.limit, 100) : 10;
     const skip = (page - 1) * limit;
 
     const where: any = {

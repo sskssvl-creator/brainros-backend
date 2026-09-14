@@ -402,7 +402,7 @@ export class SuperAdminDashboardService {
     }
 
     const page = filter.page || 1;
-    const limit = filter.limit || 50;
+    const limit = filter.limit || 10;
     const paginatedItems = items.slice((page - 1) * limit, page * limit);
 
     const result = {
@@ -496,7 +496,7 @@ export class SuperAdminDashboardService {
     }
 
     const page = filter.page || 1;
-    const limit = filter.limit || 50;
+    const limit = filter.limit || 10;
     const paginatedItems = items.slice((page - 1) * limit, page * limit);
 
     const result = {
@@ -673,7 +673,7 @@ export class SuperAdminDashboardService {
     }
 
     const page = filter.page || 1;
-    const limit = filter.limit || 50;
+    const limit = filter.limit || 10;
     const paginated = combined.slice((page - 1) * limit, page * limit);
 
     const result = {
@@ -1134,7 +1134,7 @@ export class SuperAdminDashboardService {
     }
 
     const page = filter.page || 1;
-    const limit = filter.limit || 20;
+    const limit = filter.limit || 10;
     const paginated = performanceData.slice((page - 1) * limit, page * limit);
 
     const result = {

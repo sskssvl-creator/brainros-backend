@@ -184,8 +184,8 @@ export class AdminStaffService {
    * 2. List all staff members with pagination, search, and filters.
    */
   async listStaff(filter: StaffFilterDto) {
-    const page = filter.page || 1;
-    const limit = filter.limit || 50;
+    const page = filter.page ? Math.max(1, Number(filter.page)) : 1;
+    const limit = filter.limit ? Math.min(100, Math.max(1, Number(filter.limit))) : 10;
     const skip = (page - 1) * limit;
 
     const where: any = filter.role
@@ -279,7 +279,8 @@ export class AdminStaffService {
         total,
         page,
         limit,
-        pages: Math.ceil(total / limit),
+        pages: Math.ceil(total / limit) || 1,
+        totalPages: Math.ceil(total / limit) || 1,
       },
     };
   }

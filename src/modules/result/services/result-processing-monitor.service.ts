@@ -14,6 +14,7 @@ import {
 } from '../interfaces/result-lifecycle.interface';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { Prisma } from '@prisma/client';
 
 export interface ExamProcessingSummaryResponse {
   examId: string;
@@ -138,131 +139,119 @@ export class ResultProcessingMonitorService {
       throw new NotFoundException(`Exam with ID '${examId}' not found.`);
     }
 
-    const isLive = await this.readinessService.isLiveExam(examId);
+    const titleUpper = (exam.title || '').toUpperCase();
+    const isMockOrPractice = titleUpper.includes('MOCK') || titleUpper.includes('PRACTICE');
+    const hasSchedules = exam.schedules && exam.schedules.length > 0;
+    const titleIndicatesLive = titleUpper.includes('LIVE');
+    const isLive = !isMockOrPractice && Boolean(hasSchedules || titleIndicatesLive);
 
-    const attempts = await this.prisma.attempt.findMany({
-      where: {
-        examId,
-        status: { name: { notIn: ['CANCELLED', 'NOT_STARTED'] } },
-      },
-      include: {
-        status: true,
-        result: true,
-        timeAnalyses: { select: { id: true }, take: 1 },
-        strategyAnalyses: { select: { id: true }, take: 1 },
-        candidateRanks: { select: { id: true }, take: 1 },
-      },
-    });
+    let stats: any = null;
+    try {
+      const rawStats = await this.prisma.$queryRaw<any[]>`
+        SELECT
+          COUNT(a.id)::int AS total_jobs,
+          COUNT(CASE WHEN r.result_status IN ('PUBLISHED', 'READY_TO_PUBLISH') THEN 1 END)::int AS completed_jobs,
+          COUNT(CASE WHEN r.result_status IN ('PROCESSING', 'EVALUATED', 'ANALYTICS_PROCESSING', 'RANKING_PROCESSING') THEN 1 END)::int AS processing_jobs,
+          COUNT(CASE WHEN r.result_status = 'FAILED' THEN 1 END)::int AS failed_jobs,
+          COUNT(CASE WHEN r.id IS NULL OR r.result_status = 'PENDING_WINDOW_CLOSE' OR ast.name NOT IN ('SUBMITTED', 'AUTO_SUBMITTED', 'EVALUATED') THEN 1 END)::int AS pending_jobs,
 
-    const totalJobs = attempts.length;
+          COUNT(CASE WHEN r.total_score IS NOT NULL AND r.result_status NOT IN ('PROCESSING', 'FAILED', 'PENDING_WINDOW_CLOSE') THEN 1 END)::int AS eval_completed,
+          COUNT(CASE WHEN r.result_status = 'PROCESSING' THEN 1 END)::int AS eval_processing,
+          COUNT(CASE WHEN r.result_status = 'FAILED' THEN 1 END)::int AS eval_failed,
 
-    let completedJobs = 0;
-    let processingJobs = 0;
-    let pendingJobs = 0;
-    let failedJobs = 0;
+          COUNT(CASE WHEN ta.id IS NOT NULL AND sa.id IS NOT NULL THEN 1 END)::int AS analytics_completed,
+          COUNT(CASE WHEN r.total_score IS NOT NULL AND (ta.id IS NULL OR sa.id IS NULL) AND r.result_status NOT IN ('FAILED') THEN 1 END)::int AS analytics_processing,
 
-    let evalCompleted = 0;
-    let evalProcessing = 0;
-    let evalFailed = 0;
-
-    let analyticsCompleted = 0;
-    let analyticsProcessing = 0;
-    let analyticsFailed = 0;
-
-    let rankingCompleted = 0;
-    let rankingProcessing = 0;
-    let rankingFailed = 0;
-
-    for (const att of attempts) {
-      const isFinalized = ['SUBMITTED', 'AUTO_SUBMITTED', 'EVALUATED'].includes(att.status?.name);
-      const res = att.result;
-      const resStatus = res?.resultStatus;
-
-      const evalDone = Boolean(
-        res &&
-          res.totalScore !== null &&
-          res.totalScore !== undefined &&
-          resStatus !== ResultStatusEnum.PROCESSING &&
-          resStatus !== ResultStatusEnum.FAILED &&
-          resStatus !== ResultStatusEnum.PENDING_WINDOW_CLOSE,
-      );
-      const isEvalFailed = resStatus === ResultStatusEnum.FAILED;
-
-      const analyticsDone = Boolean(
-        att.timeAnalyses &&
-          att.timeAnalyses.length > 0 &&
-          att.strategyAnalyses &&
-          att.strategyAnalyses.length > 0,
-      );
-
-      const rankDone = Boolean(att.candidateRanks && att.candidateRanks.length > 0);
-
-      // Stage: Evaluation counts
-      if (evalDone) {
-        evalCompleted++;
-      } else if (isEvalFailed) {
-        evalFailed++;
-      } else if (resStatus === ResultStatusEnum.PROCESSING) {
-        evalProcessing++;
-      }
-
-      // Stage: Analytics counts
-      if (analyticsDone) {
-        analyticsCompleted++;
-      } else if (evalDone && !isEvalFailed) {
-        analyticsProcessing++;
-      }
-
-      // Stage: Ranking counts
-      if (rankDone) {
-        rankingCompleted++;
-      } else if (analyticsDone && !isEvalFailed) {
-        rankingProcessing++;
-      }
-
-      // Overall job state
-      if (!isFinalized || !res) {
-        pendingJobs++;
-      } else if (isEvalFailed) {
-        failedJobs++;
-      } else if (
-        resStatus === ResultStatusEnum.PUBLISHED ||
-        resStatus === ResultStatusEnum.READY_TO_PUBLISH ||
-        (evalDone && analyticsDone && rankDone)
-      ) {
-        completedJobs++;
-      } else {
-        processingJobs++;
-      }
+          COUNT(CASE WHEN cr.id IS NOT NULL THEN 1 END)::int AS ranking_completed,
+          COUNT(CASE WHEN ta.id IS NOT NULL AND sa.id IS NOT NULL AND cr.id IS NULL AND r.result_status NOT IN ('FAILED') THEN 1 END)::int AS ranking_processing
+        FROM attempts a
+        JOIN attempt_statuses ast ON ast.id = a.status_id
+        LEFT JOIN results r ON r.attempt_id = a.id
+        LEFT JOIN LATERAL (SELECT id FROM time_analyses WHERE attempt_id = a.id LIMIT 1) ta ON true
+        LEFT JOIN LATERAL (SELECT id FROM strategy_analyses WHERE attempt_id = a.id LIMIT 1) sa ON true
+        LEFT JOIN LATERAL (SELECT id FROM candidate_ranks WHERE attempt_id = a.id LIMIT 1) cr ON true
+        WHERE a.exam_id = ${Prisma.raw(`'${examId}'::uuid`)}
+          AND ast.name NOT IN ('CANCELLED', 'NOT_STARTED')
+      `;
+      stats = rawStats?.[0];
+    } catch (err) {
+      this.logger.warn(`Aggregated stats query error: ${err?.message}`);
     }
+
+    const totalJobs = Number(stats?.total_jobs || 0);
+    const completedJobs = Number(stats?.completed_jobs || 0);
+    const processingJobs = Number(stats?.processing_jobs || 0);
+    const pendingJobs = Number(stats?.pending_jobs || 0);
+    const failedJobs = Number(stats?.failed_jobs || 0);
+
+    const evalCompleted = Number(stats?.eval_completed || 0);
+    const evalProcessing = Number(stats?.eval_processing || 0);
+    const evalFailed = Number(stats?.eval_failed || 0);
+
+    const analyticsCompleted = Number(stats?.analytics_completed || 0);
+    const analyticsProcessing = Number(stats?.analytics_processing || 0);
+    const analyticsFailed = Number(stats?.eval_failed || 0);
+
+    const rankingCompleted = Number(stats?.ranking_completed || 0);
+    const rankingProcessing = Number(stats?.ranking_processing || 0);
+    const rankingFailed = Number(stats?.eval_failed || 0);
 
     const overallPercentage =
       totalJobs > 0
         ? Math.min(100, Math.max(0, Math.round((completedJobs / totalJobs) * 100)))
         : 0;
 
-    // Check readiness using authoritative readiness service
-    const readiness = await this.readinessService.checkExamReadiness(examId);
+    let rankingSnapshotCompleted = false;
+    try {
+      const latestRankSnapshot = await this.prisma.rankSnapshot.findFirst({
+        where: { examId },
+        orderBy: { snapshotVersion: 'desc' },
+        select: { status: true },
+      });
+      rankingSnapshotCompleted = latestRankSnapshot?.status === 'COMPLETED';
+    } catch {
+      rankingSnapshotCompleted = rankingCompleted === totalJobs && totalJobs > 0;
+    }
+
+    const latestPub = exam.resultPublications?.[0];
+    const isPublished = Boolean(latestPub);
 
     const isReadyToPublish =
       totalJobs > 0 &&
       completedJobs === totalJobs &&
       failedJobs === 0 &&
-      readiness.ready;
+      rankingSnapshotCompleted;
 
-    const canPublish = isReadyToPublish && readiness.publicationStatus !== ExamPublicationStatusEnum.PUBLISHED;
+    const canPublish = isReadyToPublish && !isPublished;
 
     let overallStatus: ExamProcessingSummaryResponse['status'] = 'PROCESSING';
+    let publicationStatus = 'NOT_READY';
+    let notReadyReason: string | null = null;
+
     if (totalJobs === 0) {
       overallStatus = 'EMPTY';
-    } else if (readiness.publicationStatus === ExamPublicationStatusEnum.PUBLISHED) {
+      notReadyReason = 'No candidate attempts found.';
+    } else if (isPublished) {
       overallStatus = 'PUBLISHED';
+      publicationStatus = 'PUBLISHED';
     } else if (canPublish) {
       overallStatus = 'READY_TO_PUBLISH';
+      publicationStatus = 'READY_TO_PUBLISH';
     } else if (failedJobs > 0) {
       overallStatus = 'FAILED';
+      publicationStatus = 'PROCESSING';
+      notReadyReason = `${failedJobs} job(s) failed. Retry required.`;
     } else if (completedJobs === 0 && processingJobs === 0) {
       overallStatus = 'QUEUED';
+      publicationStatus = 'PROCESSING';
+      notReadyReason = 'Waiting for jobs to start.';
+    } else {
+      publicationStatus = 'PROCESSING';
+      if (evalCompleted < totalJobs) {
+        notReadyReason = `${totalJobs - evalCompleted} evaluation(s) pending.`;
+      } else if (!rankingSnapshotCompleted) {
+        notReadyReason = 'Rank snapshot pending.';
+      }
     }
 
     const redisActive = Boolean(this.redisService.getClient());
@@ -276,13 +265,13 @@ export class ResultProcessingMonitorService {
       answerKeyStatus: exam.schedules?.[0]?.hasAnswerKey ? 'UPLOADED' : 'PENDING',
       startedAt: exam.schedules?.[0]?.startTime ? exam.schedules[0].startTime.toISOString() : null,
       completedAt:
-        readiness.publicationStatus === ExamPublicationStatusEnum.PUBLISHED
+        isPublished
           ? exam.resultPublications?.[0]?.publishedAt?.toISOString() || null
           : (overallStatus === 'READY_TO_PUBLISH'
               ? exam.schedules?.[0]?.endTime?.toISOString() || null
               : null),
       examStatus: exam.status?.name,
-      publicationStatus: readiness.publicationStatus,
+      publicationStatus,
       status: overallStatus,
       overallPercentage,
       totalJobs,
@@ -321,7 +310,7 @@ export class ResultProcessingMonitorService {
       },
       isReadyToPublish,
       canPublish,
-      notReadyReason: readiness.reason,
+      notReadyReason,
       redisActive,
       lastUpdated: new Date().toISOString(),
     };

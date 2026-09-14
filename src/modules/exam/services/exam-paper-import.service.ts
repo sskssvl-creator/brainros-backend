@@ -21,7 +21,7 @@ import {
   ExamManagerFilterDto,
   TranslationValidationSummary,
 } from '../dto/exam-manager.dto';
-import { QuestionDifficultyEnum, QuestionTypeEnum } from '@prisma/client';
+import { QuestionDifficultyEnum, QuestionTypeEnum, Prisma } from '@prisma/client';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { ExamImportJobData } from '../processors/exam-import.processor';
@@ -1373,8 +1373,8 @@ export class ExamPaperImportService {
    * Get paginated staging rows for an import session
    */
   async getImportRows(importId: string, query: ExamImportFilterDto) {
-    const page = query.page || 1;
-    const limit = query.limit || 20;
+    const page = query.page ? Number(query.page) : 1;
+    const limit = query.limit ? Number(query.limit) : 10;
     const skip = (page - 1) * limit;
 
     const where: any = { importId };
@@ -1407,8 +1407,8 @@ export class ExamPaperImportService {
    * Get list of historical exam paper imports
    */
   async getImportHistory(query: ExamImportFilterDto) {
-    const page = query.page || 1;
-    const limit = query.limit || 20;
+    const page = query.page ? Number(query.page) : 1;
+    const limit = query.limit ? Number(query.limit) : 10;
     const skip = (page - 1) * limit;
 
     const where: any = {};
@@ -2205,8 +2205,8 @@ export class ExamPaperImportService {
    * GET /admin/exam-manager/exams
    */
   async getAllExamsList(query: ExamManagerFilterDto) {
-    const page = query.page ? Number(query.page) : 1;
-    const limit = query.limit ? Number(query.limit) : 20;
+    const page = query.page ? Math.max(1, Number(query.page)) : 1;
+    const limit = query.limit ? Math.min(Math.max(1, Number(query.limit)), 100) : 10;
     const skip = (page - 1) * limit;
 
     const where: any = {};
@@ -2246,17 +2246,26 @@ export class ExamPaperImportService {
       where.examQuestions = { none: {} };
     }
 
+    const sortBy = query.sortBy || 'createdAt';
+    const sortOrder: 'asc' | 'desc' = query.sortOrder === 'asc' ? 'asc' : 'desc';
+    const orderBy: any = {};
+    if (['title', 'createdAt', 'updatedAt', 'totalMarks', 'durationMinutes'].includes(sortBy)) {
+      orderBy[sortBy] = sortOrder;
+    } else {
+      orderBy['createdAt'] = 'desc';
+    }
+
     const [exams, total] = await Promise.all([
       this.prisma.exam.findMany({
         where,
         skip,
         take: limit,
-        orderBy: { createdAt: 'desc' },
+        orderBy,
         include: {
           examTarget: { select: { id: true, name: true } },
           status: { select: { id: true, name: true } },
           createdBy: {
-            select: { id: true, email: true, student: { select: { name: true } } },
+            select: { id: true, email: true, name: true, student: { select: { name: true } } },
           },
           languages: {
             include: {
@@ -2292,104 +2301,131 @@ export class ExamPaperImportService {
       this.prisma.exam.count({ where }),
     ]);
 
-    // Fetch all preferred languages for coverage calculations
-    const allLanguages = await this.prisma.preferredLanguage.findMany({
-      where: { isActive: true },
-    });
+    // 1. Fetch active languages
+    let allLanguages: any[] = [];
+    try {
+      allLanguages = await this.prisma.preferredLanguage.findMany({
+        where: { isActive: true },
+      });
+    } catch (e) {
+      this.logger.warn(`Could not load preferred languages: ${e?.message}`);
+    }
 
-    // Fetch latest import sessions for all returned exams
     const examIds = exams.map((e) => e.id);
-    const recentImports = await (this.prisma as any).examImport.findMany({
-      where: { createdExamId: { in: examIds } },
-      orderBy: { createdAt: 'desc' },
-    });
 
+    // 2. Fetch latest import sessions with safe error fallback
     const importMap = new Map<string, any>();
-    for (const imp of recentImports) {
-      if (!importMap.has(imp.createdExamId)) {
-        importMap.set(imp.createdExamId, imp);
+    if (examIds.length > 0) {
+      try {
+        const recentImports = await (this.prisma as any).examImport.findMany({
+          where: { createdExamId: { in: examIds } },
+          orderBy: { createdAt: 'desc' },
+        });
+        for (const imp of recentImports || []) {
+          if (!importMap.has(imp.createdExamId)) {
+            importMap.set(imp.createdExamId, imp);
+          }
+        }
+      } catch (err) {
+        this.logger.warn(`Could not fetch exam imports (table may be syncing): ${err?.message}`);
       }
     }
 
-    const items = await Promise.all(
-      exams.map(async (exam) => {
-        const totalQ = exam._count.examQuestions || 0;
-        const translationCoverage: Record<string, number> = {};
+    // 3. Batch translation counts in ONE single query for all returned exams
+    const translationCountsMap = new Map<string, number>(); // key: `${examId}_${languageId}`
+    if (examIds.length > 0) {
+      try {
+        const translationStats = await this.prisma.$queryRaw<
+          Array<{ exam_id: string; language_id: string; total: number | bigint }>
+        >`
+          SELECT eq.exam_id, qt.language_id, COUNT(qt.id)::int AS total
+          FROM exam_questions eq
+          JOIN question_translations qt ON qt.question_id = eq.question_id
+          WHERE eq.exam_id IN (${Prisma.join(examIds.map((id) => Prisma.raw(`'${id}'::uuid`)))})
+          GROUP BY eq.exam_id, qt.language_id
+        `;
+        for (const stat of translationStats || []) {
+          translationCountsMap.set(`${stat.exam_id}_${stat.language_id}`, Number(stat.total));
+        }
+      } catch (rawErr) {
+        this.logger.warn(`Aggregated translation query fallback: ${rawErr?.message}`);
+      }
+    }
 
-        for (const lang of allLanguages) {
-          const lCode = (lang.code || lang.name).toUpperCase();
-          if (lCode === 'EN') {
-            translationCoverage[lCode] = 100;
-          } else {
-            const count = await this.prisma.questionTranslation.count({
-              where: {
-                languageId: lang.id,
-                question: {
-                  examQuestions: { some: { examId: exam.id } },
-                },
-              },
-            });
-            const pct = Math.min(100, Math.round((count / (totalQ || 1)) * 100));
-            if (pct > 0) {
-              translationCoverage[lCode] = pct;
-            }
+    const items = exams.map((exam) => {
+      const totalQ = exam._count?.examQuestions || 0;
+      const translationCoverage: Record<string, number> = {};
+
+      for (const lang of allLanguages) {
+        const lCode = (lang.code || lang.name || '').toUpperCase();
+        if (!lCode) continue;
+
+        if (lCode === 'EN') {
+          translationCoverage[lCode] = 100;
+        } else {
+          const count = translationCountsMap.get(`${exam.id}_${lang.id}`) || 0;
+          const pct = Math.min(100, Math.round((count / (totalQ || 1)) * 100));
+          if (pct > 0) {
+            translationCoverage[lCode] = pct;
           }
         }
+      }
 
-        const isMock = /mock/i.test(exam.title);
-        const type = isMock ? 'MOCK' : 'LIVE';
-        const typeLabel = isMock ? 'Mock Test' : 'Live Exam';
-        const subjectsSummary = exam.sections
-          .map((s) => s.subject?.name || s.name)
+      const isMock = /mock/i.test(exam.title);
+      const type = isMock ? 'MOCK' : 'LIVE';
+      const typeLabel = isMock ? 'Mock Test' : 'Live Exam';
+      const subjectsSummary =
+        exam.sections
+          ?.map((s) => s.subject?.name || s.name)
           .filter(Boolean)
           .join(', ') || 'All Subjects';
 
-        const latestImport = importMap.get(exam.id);
-        let questionPaperStatus: 'NOT_UPLOADED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' = 'NOT_UPLOADED';
+      const latestImport = importMap.get(exam.id);
+      let questionPaperStatus: 'NOT_UPLOADED' | 'PROCESSING' | 'COMPLETED' | 'FAILED' =
+        'NOT_UPLOADED';
 
-        if (latestImport?.status === 'PROCESSING') {
-          questionPaperStatus = 'PROCESSING';
-        } else if ((exam._count.examQuestions || 0) > 0) {
-          questionPaperStatus = 'COMPLETED';
-        } else if (latestImport?.status === 'FAILED') {
-          questionPaperStatus = 'FAILED';
-        }
+      if (latestImport?.status === 'PROCESSING') {
+        questionPaperStatus = 'PROCESSING';
+      } else if ((exam._count?.examQuestions || 0) > 0) {
+        questionPaperStatus = 'COMPLETED';
+      } else if (latestImport?.status === 'FAILED') {
+        questionPaperStatus = 'FAILED';
+      }
 
-        return {
-          id: exam.id,
-          title: exam.title,
-          description: exam.description,
-          type,
-          typeLabel,
-          examTarget: exam.examTarget?.name || 'General',
-          subjectsSummary,
-          totalQuestions: totalQ,
-          totalMarks: exam.totalMarks,
-          durationMinutes: exam.durationMinutes,
-          status: exam.status?.name || 'DRAFT',
-          questionPaperStatus,
-          latestImportId: latestImport?.id || null,
-          importStatus: latestImport?.status || null,
-          importError: latestImport?.errorSummary || null,
-          validRows: latestImport?.validRows || 0,
-          totalRows: latestImport?.totalRows || 0,
-          createdAt: exam.createdAt,
-          updatedAt: exam.updatedAt,
-          createdBy: {
-            id: exam.createdBy?.id,
-            email: exam.createdBy?.email,
-            name: exam.createdBy?.student?.name || exam.createdBy?.email || 'Admin',
-          },
-          translationCoverage,
-          schedule: exam.schedules?.[0] || null,
-          languages: exam.languages.map((l) => ({
-            id: l.language.id,
-            name: l.language.name,
-            code: l.language.code,
-          })),
-        };
-      }),
-    );
+      return {
+        id: exam.id,
+        title: exam.title,
+        description: exam.description,
+        type,
+        typeLabel,
+        examTarget: exam.examTarget?.name || 'General',
+        subjectsSummary,
+        totalQuestions: totalQ,
+        totalMarks: exam.totalMarks,
+        durationMinutes: exam.durationMinutes,
+        status: exam.status?.name || 'DRAFT',
+        questionPaperStatus,
+        latestImportId: latestImport?.id || null,
+        importStatus: latestImport?.status || null,
+        importError: latestImport?.errorSummary || null,
+        validRows: latestImport?.validRows || 0,
+        totalRows: latestImport?.totalRows || 0,
+        createdAt: exam.createdAt,
+        updatedAt: exam.updatedAt,
+        createdBy: {
+          id: exam.createdBy?.id,
+          email: exam.createdBy?.email,
+          name: exam.createdBy?.name || exam.createdBy?.student?.name || exam.createdBy?.email || 'Admin',
+        },
+        translationCoverage,
+        schedule: exam.schedules?.[0] || null,
+        languages: (exam.languages || []).map((l) => ({
+          id: l.language?.id,
+          name: l.language?.name,
+          code: l.language?.code,
+        })),
+      };
+    });
 
     return {
       items,
@@ -2397,7 +2433,7 @@ export class ExamPaperImportService {
         total,
         page,
         limit,
-        totalPages: Math.ceil(total / limit),
+        totalPages: Math.ceil(total / limit) || 1,
       },
     };
   }

@@ -1285,7 +1285,7 @@ export class ExamAttemptService {
     }
 
     const page = Math.max(1, Number(query?.page) || 1);
-    const limit = Math.max(1, Math.min(50, Number(query?.limit) || 12));
+    const limit = Math.max(1, Math.min(50, Number(query?.limit) || 10));
     const skip = (page - 1) * limit;
 
     // If user has no associated student profile, return empty array cleanly
