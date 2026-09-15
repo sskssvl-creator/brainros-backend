@@ -140,32 +140,35 @@ export class ApprovalWorkflowService implements OnModuleInit {
     }
 
     // 3. Create ApprovalRequest record & AuditLog inside a transaction
-    return this.prisma.$transaction(async (tx) => {
-      const request = await tx.approvalRequest.create({
-        data: {
-          resourceType: dto.entityType.toUpperCase(),
-          resourceId: dto.entityId,
-          requestedById: submittedById,
-          status: 'PENDING',
-          metadata: dto.metadata || {},
-          submittedAt: new Date(),
-        },
-      });
+    return this.prisma.$transaction(
+      async (tx) => {
+        const request = await tx.approvalRequest.create({
+          data: {
+            resourceType: dto.entityType.toUpperCase(),
+            resourceId: dto.entityId,
+            requestedById: submittedById,
+            status: 'PENDING',
+            metadata: dto.metadata || {},
+            submittedAt: new Date(),
+          },
+        });
 
-      await this.auditService.logAction({
-        actorUserId: submittedById,
-        action: 'SUBMIT_APPROVAL',
-        entityType: dto.entityType.toUpperCase(),
-        entityId: dto.entityId,
-        afterState: { approvalRequestId: request.id, status: 'PENDING' },
-        metadata: dto.metadata,
-        ipAddress,
-        userAgent,
-        tx,
-      });
+        await this.auditService.logAction({
+          actorUserId: submittedById,
+          action: 'SUBMIT_APPROVAL',
+          entityType: dto.entityType.toUpperCase(),
+          entityId: dto.entityId,
+          afterState: { approvalRequestId: request.id, status: 'PENDING' },
+          metadata: dto.metadata,
+          ipAddress,
+          userAgent,
+          tx,
+        });
 
-      return request;
-    });
+        return request;
+      },
+      { maxWait: 15000, timeout: 60000 },
+    );
   }
 
   /**
@@ -213,40 +216,43 @@ export class ApprovalWorkflowService implements OnModuleInit {
 
     const handler = this.registry.getHandler(request.resourceType);
 
-    return this.prisma.$transaction(async (tx) => {
-      // Execute domain-specific transition
-      const { beforeState, afterState } = await handler.onApprove(
-        request,
-        reviewerId,
-        dto.comment,
-        tx,
-      );
+    return this.prisma.$transaction(
+      async (tx) => {
+        // Execute domain-specific transition
+        const { beforeState, afterState } = await handler.onApprove(
+          request,
+          reviewerId,
+          dto.comment,
+          tx,
+        );
 
-      const updatedRequest = await tx.approvalRequest.update({
-        where: { id: requestId },
-        data: {
-          status: 'APPROVED',
-          reviewedById: reviewerId,
-          reviewedAt: new Date(),
-          reviewComment: dto.comment || null,
-        },
-      });
+        const updatedRequest = await tx.approvalRequest.update({
+          where: { id: requestId },
+          data: {
+            status: 'APPROVED',
+            reviewedById: reviewerId,
+            reviewedAt: new Date(),
+            reviewComment: dto.comment || null,
+          },
+        });
 
-      await this.auditService.logAction({
-        actorUserId: reviewerId,
-        action: 'APPROVE',
-        entityType: request.resourceType,
-        entityId: request.resourceId,
-        beforeState,
-        afterState,
-        reason: dto.comment,
-        ipAddress,
-        userAgent,
-        tx,
-      });
+        await this.auditService.logAction({
+          actorUserId: reviewerId,
+          action: 'APPROVE',
+          entityType: request.resourceType,
+          entityId: request.resourceId,
+          beforeState,
+          afterState,
+          reason: dto.comment,
+          ipAddress,
+          userAgent,
+          tx,
+        });
 
-      return updatedRequest;
-    });
+        return updatedRequest;
+      },
+      { maxWait: 15000, timeout: 60000 },
+    );
   }
 
   /**
@@ -279,40 +285,43 @@ export class ApprovalWorkflowService implements OnModuleInit {
 
     const handler = this.registry.getHandler(request.resourceType);
 
-    return this.prisma.$transaction(async (tx) => {
-      const { beforeState, afterState } = await handler.onReject(
-        request,
-        reviewerId,
-        dto.reason,
-        tx,
-      );
+    return this.prisma.$transaction(
+      async (tx) => {
+        const { beforeState, afterState } = await handler.onReject(
+          request,
+          reviewerId,
+          dto.reason,
+          tx,
+        );
 
-      const updatedRequest = await tx.approvalRequest.update({
-        where: { id: requestId },
-        data: {
-          status: 'REJECTED',
-          reviewedById: reviewerId,
-          reviewedAt: new Date(),
-          rejectionReason: dto.reason,
-          reviewComment: dto.comment || null,
-        },
-      });
+        const updatedRequest = await tx.approvalRequest.update({
+          where: { id: requestId },
+          data: {
+            status: 'REJECTED',
+            reviewedById: reviewerId,
+            reviewedAt: new Date(),
+            rejectionReason: dto.reason,
+            reviewComment: dto.comment || null,
+          },
+        });
 
-      await this.auditService.logAction({
-        actorUserId: reviewerId,
-        action: 'REJECT',
-        entityType: request.resourceType,
-        entityId: request.resourceId,
-        beforeState,
-        afterState,
-        reason: dto.reason,
-        ipAddress,
-        userAgent,
-        tx,
-      });
+        await this.auditService.logAction({
+          actorUserId: reviewerId,
+          action: 'REJECT',
+          entityType: request.resourceType,
+          entityId: request.resourceId,
+          beforeState,
+          afterState,
+          reason: dto.reason,
+          ipAddress,
+          userAgent,
+          tx,
+        });
 
-      return updatedRequest;
-    });
+        return updatedRequest;
+      },
+      { maxWait: 15000, timeout: 60000 },
+    );
   }
 
   /**
@@ -341,35 +350,38 @@ export class ApprovalWorkflowService implements OnModuleInit {
 
     const handler = this.registry.getHandler(request.resourceType);
 
-    return this.prisma.$transaction(async (tx) => {
-      let states = { beforeState: {}, afterState: {} };
-      if (handler.onCancel) {
-        states = await handler.onCancel(request, actorId, tx);
-      }
+    return this.prisma.$transaction(
+      async (tx) => {
+        let states = { beforeState: {}, afterState: {} };
+        if (handler.onCancel) {
+          states = await handler.onCancel(request, actorId, tx);
+        }
 
-      const updatedRequest = await tx.approvalRequest.update({
-        where: { id: requestId },
-        data: {
-          status: 'CANCELLED',
-          rejectionReason: dto.reason || 'Cancelled by requester',
-        },
-      });
+        const updatedRequest = await tx.approvalRequest.update({
+          where: { id: requestId },
+          data: {
+            status: 'CANCELLED',
+            rejectionReason: dto.reason || 'Cancelled by requester',
+          },
+        });
 
-      await this.auditService.logAction({
-        actorUserId: actorId,
-        action: 'CANCEL_APPROVAL',
-        entityType: request.resourceType,
-        entityId: request.resourceId,
-        beforeState: states.beforeState,
-        afterState: states.afterState,
-        reason: dto.reason,
-        ipAddress,
-        userAgent,
-        tx,
-      });
+        await this.auditService.logAction({
+          actorUserId: actorId,
+          action: 'CANCEL_APPROVAL',
+          entityType: request.resourceType,
+          entityId: request.resourceId,
+          beforeState: states.beforeState,
+          afterState: states.afterState,
+          reason: dto.reason,
+          ipAddress,
+          userAgent,
+          tx,
+        });
 
-      return updatedRequest;
-    });
+        return updatedRequest;
+      },
+      { maxWait: 15000, timeout: 60000 },
+    );
   }
 
   /**

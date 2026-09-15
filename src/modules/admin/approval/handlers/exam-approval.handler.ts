@@ -80,11 +80,7 @@ export class ExamApprovalHandler implements IApprovalHandler {
     // ── 1. SCHEDULED EXAMS WORKFLOW: APPROVAL -> ACTIVATE EXAM & SCHEDULE ──
     // When Super Admin approves an exam in SCHEDULED state (or with a schedule), it activates the exam & schedule
     if (exam.status.name === 'SCHEDULED' || activeSchedule) {
-      if (activeSchedule) {
-        await this.scheduleService.activateExam(activeSchedule.id, reviewerId);
-      } else {
-        await this.lifecycleService.activateExam(exam.id, reviewerId, tx);
-      }
+      await this.lifecycleService.activateExam(exam.id, reviewerId, tx);
 
       const updated = await db.exam.findUnique({
         where: { id: exam.id },
