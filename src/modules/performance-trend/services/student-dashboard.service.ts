@@ -120,6 +120,15 @@ export class StudentDashboardService {
               ],
             }
           : {}),
+        // Filter out expired exams so upcoming and live exams are prioritized
+        AND: [
+          {
+            OR: [
+              { endTime: { gt: now } },
+              { schedules: { some: { status: { in: ['SCHEDULED', 'ACTIVE'] }, endTime: { gt: now } } } },
+            ],
+          },
+        ],
         NOT: {
           attempts: {
             some: {
@@ -133,8 +142,8 @@ export class StudentDashboardService {
         examTarget: { select: { id: true, name: true } },
         status: { select: { id: true, name: true } },
         schedules: {
-          where: { status: { in: ['SCHEDULED', 'ACTIVE'] } },
-          orderBy: { createdAt: 'desc' },
+          where: { status: { in: ['SCHEDULED', 'ACTIVE'] }, endTime: { gt: now } },
+          orderBy: { startTime: 'asc' },
           take: 1,
         },
       },

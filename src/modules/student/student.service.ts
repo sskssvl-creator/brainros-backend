@@ -554,20 +554,26 @@ export class StudentService {
 
     // Base criteria: Exclude DRAFT, CANCELLED, GENERATING, and un-scheduled APPROVED exams
     const where: any = {
-      OR: [
-        { status: { name: { in: ['SCHEDULED', 'ACTIVE', 'COMPLETED', 'ENDED'] } } },
-        { attempts: { some: { studentId: student.id } } },
+      AND: [
+        {
+          OR: [
+            { status: { name: { in: ['SCHEDULED', 'ACTIVE', 'COMPLETED', 'ENDED'] } } },
+            { attempts: { some: { studentId: student.id } } },
+          ],
+        },
       ],
     };
 
     // Filter by Exam Target if student has one or if query specified
     if (query.examTargetId) {
-      where.examTargetId = query.examTargetId;
+      where.AND.push({ examTargetId: query.examTargetId });
     } else if (targetIds.length > 0) {
-      where.OR = [
-        { examTargetId: { in: targetIds } },
-        { examTarget: { name: 'General' } },
-      ];
+      where.AND.push({
+        OR: [
+          { examTargetId: { in: targetIds } },
+          { examTarget: { name: 'General' } },
+        ],
+      });
     }
 
     // Search by title or target name

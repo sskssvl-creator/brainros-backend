@@ -61,6 +61,17 @@ describe('GeminiErrorClassifier', () => {
       expect(classified.userFacingMessage).toContain('could not be processed');
     });
 
+    it('should classify model JSON output parsing failures as retryable MODEL_OUTPUT_ERROR', () => {
+      const error = new Error(
+        'Invalid JSON returned from AI model: Expected double-quoted property name in JSON at position 247',
+      );
+
+      const classified = GeminiErrorClassifier.classify(error);
+      expect(classified.kind).toBe(GeminiErrorKind.MODEL_OUTPUT_ERROR);
+      expect(classified.isRetryable).toBe(true);
+      expect(classified.userFacingMessage).toContain('Retrying translation automatically');
+    });
+
     it('should classify 404 Model Not Found as non-retryable', () => {
       const error = new Error(
         '[404 Not Found] models/unknown-model is not found for API version v1beta',

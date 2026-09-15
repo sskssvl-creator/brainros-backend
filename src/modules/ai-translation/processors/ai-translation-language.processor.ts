@@ -154,104 +154,107 @@ export class AiTranslationLanguageProcessor extends WorkerHost {
         );
 
         // Upsert translations into DB transaction
-        await this.prisma.$transaction(async (tx) => {
-          for (const evq of untranslatedSlice) {
-            const tr = transMap.get(evq.sequenceNumber);
-            if (!tr) continue;
+        await this.prisma.$transaction(
+          async (tx) => {
+            for (const evq of untranslatedSlice) {
+              const tr = transMap.get(evq.sequenceNumber);
+              if (!tr) continue;
 
-            // 1. QuestionTranslation
-            if (evq.sourceQuestionId) {
-              await tx.questionTranslation.upsert({
-                where: {
-                  questionId_languageId: {
+              // 1. QuestionTranslation
+              if (evq.sourceQuestionId) {
+                await tx.questionTranslation.upsert({
+                  where: {
+                    questionId_languageId: {
+                      questionId: evq.sourceQuestionId,
+                      languageId,
+                    },
+                  },
+                  create: {
                     questionId: evq.sourceQuestionId,
+                    languageId,
+                    questionText: tr.question,
+                    explanation: evq.explanation,
+                  },
+                  update: {
+                    questionText: tr.question,
+                  },
+                });
+              }
+
+              // 2. ExamVersionTranslation
+              await tx.examVersionTranslation.upsert({
+                where: {
+                  examVersionQuestionId_languageId: {
+                    examVersionQuestionId: evq.id,
                     languageId,
                   },
                 },
                 create: {
-                  questionId: evq.sourceQuestionId,
+                  examVersionQuestionId: evq.id,
                   languageId,
+                  languageCode,
                   questionText: tr.question,
                   explanation: evq.explanation,
                 },
                 update: {
                   questionText: tr.question,
+                  languageCode,
                 },
               });
-            }
 
-            // 2. ExamVersionTranslation
-            await tx.examVersionTranslation.upsert({
-              where: {
-                examVersionQuestionId_languageId: {
-                  examVersionQuestionId: evq.id,
-                  languageId,
-                },
-              },
-              create: {
-                examVersionQuestionId: evq.id,
-                languageId,
-                languageCode,
-                questionText: tr.question,
-                explanation: evq.explanation,
-              },
-              update: {
-                questionText: tr.question,
-                languageCode,
-              },
-            });
+              // 3. QuestionOptionTranslation & ExamVersionOptionTranslation
+              const optMap: Record<string, string> = {
+                A: tr.optionA,
+                B: tr.optionB,
+                C: tr.optionC,
+                D: tr.optionD,
+              };
 
-            // 3. QuestionOptionTranslation & ExamVersionOptionTranslation
-            const optMap: Record<string, string> = {
-              A: tr.optionA,
-              B: tr.optionB,
-              C: tr.optionC,
-              D: tr.optionD,
-            };
+              for (const evOpt of evq.options) {
+                const optText = optMap[evOpt.optionKey] || evOpt.optionText;
 
-            for (const evOpt of evq.options) {
-              const optText = optMap[evOpt.optionKey] || evOpt.optionText;
-
-              if (evOpt.sourceOptionId) {
-                await tx.questionOptionTranslation.upsert({
-                  where: {
-                    optionId_languageId: {
+                if (evOpt.sourceOptionId) {
+                  await tx.questionOptionTranslation.upsert({
+                    where: {
+                      optionId_languageId: {
+                        optionId: evOpt.sourceOptionId,
+                        languageId,
+                      },
+                    },
+                    create: {
                       optionId: evOpt.sourceOptionId,
+                      languageId,
+                      optionText: optText,
+                    },
+                    update: {
+                      optionText: optText,
+                    },
+                  });
+                }
+
+                await tx.examVersionOptionTranslation.upsert({
+                  where: {
+                    examVersionOptionId_languageId: {
+                      examVersionOptionId: evOpt.id,
                       languageId,
                     },
                   },
                   create: {
-                    optionId: evOpt.sourceOptionId,
+                    examVersionOptionId: evOpt.id,
                     languageId,
+                    languageCode,
                     optionText: optText,
                   },
                   update: {
                     optionText: optText,
+                    languageCode,
                   },
                 });
               }
-
-              await tx.examVersionOptionTranslation.upsert({
-                where: {
-                  examVersionOptionId_languageId: {
-                    examVersionOptionId: evOpt.id,
-                    languageId,
-                  },
-                },
-                create: {
-                  examVersionOptionId: evOpt.id,
-                  languageId,
-                  languageCode,
-                  optionText: optText,
-                },
-                update: {
-                  optionText: optText,
-                  languageCode,
-                },
-              });
             }
-          }
-        });
+          },
+          { maxWait: 15000, timeout: 60000 },
+        );
 
         completedQuestions += batchSlice.length;
 

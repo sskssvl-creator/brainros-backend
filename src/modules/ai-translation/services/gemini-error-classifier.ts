@@ -4,6 +4,7 @@ export enum GeminiErrorKind {
   AUTHENTICATION_ERROR = 'AUTHENTICATION_ERROR',
   INVALID_REQUEST = 'INVALID_REQUEST',
   MODEL_UNAVAILABLE = 'MODEL_UNAVAILABLE',
+  MODEL_OUTPUT_ERROR = 'MODEL_OUTPUT_ERROR',
   SERVER_ERROR = 'SERVER_ERROR',
   NETWORK_ERROR = 'NETWORK_ERROR',
   UNKNOWN_ERROR = 'UNKNOWN_ERROR',
@@ -149,12 +150,29 @@ export class GeminiErrorClassifier {
       };
     }
 
-    // 5. Invalid / Malformed Request (400)
+    // 5. Model Output / JSON parsing issues from LLM output (Retryable)
+    if (
+      rawMessage.includes('Invalid JSON returned from AI model') ||
+      rawMessage.includes('AI response is not a valid JSON') ||
+      rawMessage.includes('Missing translated item for question') ||
+      rawMessage.includes('malformed output')
+    ) {
+      return {
+        kind: GeminiErrorKind.MODEL_OUTPUT_ERROR,
+        isRetryable: true,
+        retryDelayMs: defaultDelay,
+        internalMessage: rawMessage,
+        userFacingMessage:
+          'AI translation returned incomplete formatting. Retrying translation automatically...',
+      };
+    }
+
+    // 6. Invalid / Malformed Request (400 from Google API endpoint)
     if (
       rawMessage.includes('400') ||
       rawMessage.includes('INVALID_ARGUMENT') ||
       rawMessage.includes('Bad Request') ||
-      rawMessage.includes('Invalid JSON')
+      rawMessage.includes('Invalid JSON payload')
     ) {
       return {
         kind: GeminiErrorKind.INVALID_REQUEST,

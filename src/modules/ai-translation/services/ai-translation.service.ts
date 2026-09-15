@@ -322,7 +322,8 @@ export class AiTranslationService {
     const defaultLangId = defaultLanguage?.id || '';
 
     // Execute atomic transaction for questions + exam version + job record
-    const result = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(
+      async (tx) => {
       // 1. Check or create ExamSection
       let examSection = exam.sections[0];
       if (!examSection) {
@@ -638,7 +639,7 @@ export class AiTranslationService {
         aiJob,
         examVersionId: examVersion.id,
       };
-    });
+    }, { maxWait: 15000, timeout: 60000 });
 
     // 7. Enqueue BullMQ parent job
     await this.parentQueue.add(

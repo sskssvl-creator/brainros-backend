@@ -213,7 +213,8 @@ STRICT TRANSLATION RULES:
 3. Do NOT leave sentences, placeholder words, or text in English/Latin characters when translating into a regional language. Even if the input contains test data, dummy words, or placeholder text, translate and render them completely into ${targetLanguageName}'s native script.
 4. DO NOT change or reorder 'questionNumber'.
 5. Preserve mathematical formulas, chemical equations, numerical values, and standard scientific units (e.g. m/s², kg, °C).
-6. Output strictly a valid JSON array of objects with the exact schema:
+6. If the translated text contains double quotes ("), properly escape them as \\" inside JSON strings.
+7. Output strictly a valid JSON array of objects without markdown fences, comments, or trailing commas:
 [
   {
     "questionNumber": number,
@@ -230,28 +231,61 @@ ${JSON.stringify(questions, null, 2)}
 `;
   }
 
+  private extractAndCleanJson(responseText: string): any {
+    let cleanText = responseText.trim();
+
+    // 1. Remove markdown code fences anywhere in the string
+    const codeBlockMatch = cleanText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (codeBlockMatch && codeBlockMatch[1]) {
+      cleanText = codeBlockMatch[1].trim();
+    } else {
+      cleanText = cleanText
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/, '')
+        .replace(/\s*```$/, '')
+        .trim();
+    }
+
+    // 2. Locate outermost JSON array [ ... ]
+    const firstBracket = cleanText.indexOf('[');
+    const lastBracket = cleanText.lastIndexOf(']');
+    if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+      cleanText = cleanText.substring(firstBracket, lastBracket + 1);
+    }
+
+    // 3. Try standard JSON.parse first
+    try {
+      return JSON.parse(cleanText);
+    } catch (firstErr: any) {
+      // 4. Sanitize trailing commas before } or ]
+      let repaired = cleanText.replace(/,\s*([}\]])/g, '$1');
+
+      try {
+        return JSON.parse(repaired);
+      } catch (secondErr: any) {
+        // 5. Try fixing unescaped newlines/tabs inside JSON string literals
+        repaired = repaired.replace(/[\u0000-\u001F\u007F-\u009F]/g, (c) => {
+          if (c === '\n') return '\\n';
+          if (c === '\r') return '\\r';
+          if (c === '\t') return '\\t';
+          return '';
+        });
+
+        try {
+          return JSON.parse(repaired);
+        } catch (_) {
+          // Re-throw with clean message for retry classifier
+          throw new Error(`Invalid JSON returned from AI model: ${firstErr.message}`);
+        }
+      }
+    }
+  }
+
   private parseAndValidateResponse(
     responseText: string,
     originalQuestions: QuestionBatchItem[],
   ): TranslatedQuestionBatchItem[] {
-    let rawJson: any;
-    try {
-      // Clean possible markdown code fences if returned
-      let cleanText = responseText.trim();
-      if (cleanText.startsWith('```json')) {
-        cleanText = cleanText.substring(7);
-      }
-      if (cleanText.startsWith('```')) {
-        cleanText = cleanText.substring(3);
-      }
-      if (cleanText.endsWith('```')) {
-        cleanText = cleanText.substring(0, cleanText.length - 3);
-      }
-      cleanText = cleanText.trim();
-      rawJson = JSON.parse(cleanText);
-    } catch (e: any) {
-      throw new Error(`Invalid JSON returned from AI model: ${e.message}`);
-    }
+    const rawJson = this.extractAndCleanJson(responseText);
 
     if (!Array.isArray(rawJson)) {
       throw new Error('AI response is not a valid JSON array.');
