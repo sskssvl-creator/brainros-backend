@@ -313,7 +313,8 @@ describe('2FA Integration & End-to-End Authentication Flows', () => {
           otp: '847291',
         });
 
-        expect(verifyRes.message).toMatch(/Registration successful/);
+        expect(verifyRes.message).toMatch(/OTP verified|Registration successful/);
+        expect(verifyRes.data.otpVerified).toBe(true);
       });
 
       it('CRITICAL: real provider error must fail gracefully and NEVER accept 12345', async () => {

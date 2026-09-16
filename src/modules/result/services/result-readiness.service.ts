@@ -37,14 +37,24 @@ export class ResultReadinessService {
 
     if (!exam) return false;
 
-    const titleUpper = (exam.title || '').toUpperCase();
-    const isMockOrPractice =
-      titleUpper.includes('MOCK') || titleUpper.includes('PRACTICE');
-    if (isMockOrPractice) return false;
+    const typeUpper = ((exam as any).examType || (exam as any).type || '').toUpperCase();
+    const hasSchedules = Boolean(exam.schedules && exam.schedules.length > 0);
 
-    // Only non-mock synchronized live exams are Live
-    const hasSchedules = exam.schedules && exam.schedules.length > 0;
+    // If exam has live schedules or explicit LIVE type, it is an official LIVE exam
+    if (hasSchedules || typeUpper === 'LIVE') {
+      return true;
+    }
+
+    // Standalone on-demand MOCK tests without any schedule
+    if (typeUpper === 'MOCK' && !hasSchedules) {
+      return false;
+    }
+
+    const titleUpper = (exam.title || '').toUpperCase();
     const titleIndicatesLive = titleUpper.includes('LIVE');
+    const isMockOrPractice = titleUpper.includes('MOCK') || titleUpper.includes('PRACTICE');
+
+    if (isMockOrPractice && !titleIndicatesLive) return false;
 
     return Boolean(hasSchedules || titleIndicatesLive);
   }
@@ -106,7 +116,13 @@ export class ResultReadinessService {
     );
 
     const evaluatedAttempts = finalizedAttempts.filter(
-      (a) => a.result !== null && (a.result as any).totalScore !== undefined,
+      (a) =>
+        a.result !== null &&
+        (a.result as any).totalScore !== undefined &&
+        (a.result as any).totalScore !== null &&
+        (a.result as any).resultStatus !== ResultStatusEnum.PENDING_WINDOW_CLOSE &&
+        (a.result as any).resultStatus !== ResultStatusEnum.PROCESSING &&
+        (a.result as any).resultStatus !== ResultStatusEnum.FAILED,
     );
 
     const analyticsCompletedAttempts = finalizedAttempts.filter(
@@ -174,10 +190,6 @@ export class ResultReadinessService {
       reason = `${activeCount} candidate attempt(s) are still in progress and not yet finalized.`;
     } else if (evaluatedAttempts.length < finalizedAttempts.length) {
       reason = `${pendingEvaluationCount} attempt(s) are still undergoing scoring/evaluation.`;
-    } else if (analyticsCompletedAttempts.length < finalizedAttempts.length) {
-      reason = `${finalizedAttempts.length - analyticsCompletedAttempts.length} attempt(s) are undergoing time & strategy analytics.`;
-    } else if (!rankingCompleted) {
-      reason = 'Official rank and percentile calculation is in progress.';
     } else if (!securityReviewCompleted) {
       reason = `${pendingSecurityReviews} flagged attempt(s) require security review before publication.`;
     } else {

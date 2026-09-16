@@ -10,6 +10,8 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { ResultService } from '../result.service';
 import { JobProgressService } from '../../job-progress/services/job-progress.service';
+import { TimeAnalysisService } from '../../time-analysis/services/time-analysis.service';
+import { StrategyAnalyzerService } from '../../attempt-strategy/services/strategy-analyzer.service';
 
 @Processor(ANALYTICS_QUEUE_NAME, {
   concurrency: 5,
@@ -20,6 +22,8 @@ export class AnalyticsProcessor extends WorkerHost {
   constructor(
     private readonly prisma: PrismaService,
     private readonly resultService: ResultService,
+    private readonly timeAnalysisService: TimeAnalysisService,
+    private readonly strategyAnalyzerService: StrategyAnalyzerService,
     @InjectQueue(RANKING_QUEUE_NAME)
     private readonly rankingQueue: Queue,
     private readonly jobProgressService: JobProgressService,
@@ -67,9 +71,21 @@ export class AnalyticsProcessor extends WorkerHost {
         });
       }
 
-      // 2. Execute Time Analysis & Attempt Strategy calculations
+      // 2. Execute Time Analysis & Attempt Strategy calculations and materialize them
       await this.resultService.getTimeAnalysis(attemptId);
       await this.resultService.getAttemptStrategy(attemptId);
+
+      try {
+        await this.timeAnalysisService.generateTimeAnalysis(attemptId);
+      } catch (tErr: any) {
+        this.logger.warn(`Time analysis materialization error: ${tErr.message}`);
+      }
+
+      try {
+        await this.strategyAnalyzerService.generateStrategyAnalysis(attemptId);
+      } catch (sErr: any) {
+        this.logger.warn(`Strategy analysis materialization error: ${sErr.message}`);
+      }
 
       await this.jobProgressService.publishProgress(
         ANALYTICS_QUEUE_NAME,

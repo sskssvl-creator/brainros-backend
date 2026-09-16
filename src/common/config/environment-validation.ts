@@ -38,15 +38,20 @@ export function validateEnvironment(logger: AppLoggerService): void {
 
   if (process.env.NODE_ENV === 'production') {
     const jwtSecret = process.env.JWT_SECRET?.trim();
+    if (!jwtSecret) {
+      const errorMsg = 'Insecure production configuration: JWT_SECRET is missing. Production requires a strong, dedicated JWT_SECRET.';
+      logger.fatal(errorMsg, undefined, 'ConfigValidation');
+      process.exit(1);
+      throw new Error(errorMsg);
+    }
     if (
-      !jwtSecret ||
       jwtSecret === 'super-secret-jwt-key-replace-in-production' ||
       jwtSecret === 'your-strong-production-jwt-secret-here'
     ) {
-      logger.warn(
-        `[ConfigValidation] JWT_SECRET is using placeholder or default value. Make sure a strong dedicated JWT_SECRET is set for live environments.`,
-        'ConfigValidation',
-      );
+      const errorMsg = 'Insecure production configuration: JWT_SECRET is using placeholder value. Production requires a strong, dedicated JWT_SECRET.';
+      logger.fatal(errorMsg, undefined, 'ConfigValidation');
+      process.exit(1);
+      throw new Error(errorMsg);
     }
 
     const isBypassOtp = parseBooleanFlag(process.env.BYPASS_OTP);
@@ -61,10 +66,10 @@ export function validateEnvironment(logger: AppLoggerService): void {
       if (isLoginOtpDbMode) activeFlags.push('LOGIN_OTP_DATABASE_MODE=true');
       if (isRealOtpFalse) activeFlags.push('ENABLE_REAL_OTP=false');
 
-      logger.warn(
-        `[ConfigValidation] Authentication flags active: [${activeFlags.join(', ')}].`,
-        'ConfigValidation',
-      );
+      const errorMsg = `Insecure authentication bypass flags detected in production: [${activeFlags.join(', ')}]. Production requires real OTP validation.`;
+      logger.fatal(errorMsg, undefined, 'ConfigValidation');
+      process.exit(1);
+      throw new Error(errorMsg);
     }
   }
 }

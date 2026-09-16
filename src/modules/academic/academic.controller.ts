@@ -97,7 +97,7 @@ export class AcademicController {
   }
 
   // ─── Chapters ────────────────────────────────────────────────
-  @Get('chapters')
+  @Get(['chapters', 'chapters/all'])
   findAllChapters(@Query() query: ChapterQueryDto) {
     return this.academicService.findAllChapters(query);
   }

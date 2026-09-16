@@ -18,6 +18,7 @@ import {
 
 import { RecommendationEngineService } from '../../recommendation/services/recommendation-engine.service';
 import { StudentTargetPredictionService } from '../../predicted-rank/services/student-target-prediction.service';
+import { resolveEligibleExamTypes } from '../../../common/constants/target-exam.constant';
 
 @Injectable()
 export class StudentDashboardService {
@@ -101,11 +102,38 @@ export class StudentDashboardService {
       };
     }
 
+    // Resolve eligible actual exam target IDs
+    const rawTargetNames: string[] = [];
+    if (student.examTarget?.name) rawTargetNames.push(student.examTarget.name);
+    if (Array.isArray(student.studentExamTargets)) {
+      student.studentExamTargets.forEach((st: any) => {
+        if (st.examTarget?.name) rawTargetNames.push(st.examTarget.name);
+      });
+    }
+
+    const eligibleExamTypeNames = new Set<string>();
+    for (const name of rawTargetNames) {
+      const resolved = resolveEligibleExamTypes(name);
+      resolved.forEach((t) => eligibleExamTypeNames.add(t));
+    }
+
+    const directIds = [
+      ...(student.examTargetId ? [student.examTargetId] : []),
+      ...(student.studentExamTargets?.map((st: any) => st.examTargetId) || []),
+    ];
+
+    const matchingTargets = await this.prisma.examTarget.findMany({
+      where: {
+        OR: [
+          { name: { in: Array.from(eligibleExamTypeNames) } },
+          { id: { in: directIds } },
+        ],
+      },
+      select: { id: true },
+    });
+
     const targetIds = Array.from(
-      new Set([
-        ...(student.studentExamTargets?.map((st: any) => st.examTargetId) || []),
-        ...(student.examTargetId ? [student.examTargetId] : []),
-      ]),
+      new Set([...matchingTargets.map((t) => t.id), ...directIds]),
     );
 
     // 3. Fetch Upcoming / Live Exams for Student's Target
@@ -142,12 +170,12 @@ export class StudentDashboardService {
         examTarget: { select: { id: true, name: true } },
         status: { select: { id: true, name: true } },
         schedules: {
-          where: { status: { in: ['SCHEDULED', 'ACTIVE'] }, endTime: { gt: now } },
-          orderBy: { startTime: 'asc' },
+          where: { status: { in: ['SCHEDULED', 'ACTIVE', 'RESCHEDULED'] }, endTime: { gt: now } },
+          orderBy: [{ updatedAt: 'desc' }, { startTime: 'asc' }],
           take: 1,
         },
       },
-      orderBy: [{ startTime: 'asc' }, { createdAt: 'desc' }],
+      orderBy: [{ startTime: 'asc' }, { updatedAt: 'desc' }, { createdAt: 'desc' }],
       take: 10,
     });
 
@@ -551,9 +579,9 @@ export class StudentDashboardService {
       unreadNotificationCount: unreadCount,
     };
 
-    // Cache in Redis for 30 seconds
+    // Cache in Redis for 5 seconds
     try {
-      await this.redis.set(cacheKey, JSON.stringify(response), 30);
+      await this.redis.set(cacheKey, JSON.stringify(response), 5);
     } catch {
       // Ignore cache write error
     }

@@ -17,6 +17,7 @@ import {
   RequestChangeEmailDto,
   VerifyChangeEmailDto,
 } from './dto/change-email.dto';
+import { resolveEligibleExamTypes } from '../../common/constants/target-exam.constant';
 
 @Injectable()
 export class StudentService {
@@ -28,6 +29,45 @@ export class StudentService {
     private readonly otpService: OtpService,
     private readonly redisService: RedisService,
   ) {}
+
+  /**
+   * Resolves the student's target exam combination into all eligible actual ExamTarget DB record IDs.
+   * Handles combo targets (e.g. 'NEET + JEE' -> [NEET_ID, JEE_ID]).
+   */
+  private async getEligibleExamTargetIdsForStudent(student: any): Promise<string[]> {
+    const rawTargetNames: string[] = [];
+    if (student.examTarget?.name) {
+      rawTargetNames.push(student.examTarget.name);
+    }
+    if (Array.isArray(student.studentExamTargets)) {
+      student.studentExamTargets.forEach((st: any) => {
+        if (st.examTarget?.name) rawTargetNames.push(st.examTarget.name);
+      });
+    }
+
+    const eligibleExamTypeNames = new Set<string>();
+    for (const name of rawTargetNames) {
+      const resolved = resolveEligibleExamTypes(name);
+      resolved.forEach((t) => eligibleExamTypeNames.add(t));
+    }
+
+    const directIds = [
+      ...(student.examTargetId ? [student.examTargetId] : []),
+      ...(student.studentExamTargets?.map((st: any) => st.examTargetId) || []),
+    ];
+
+    const matchingTargets = await this.prisma.examTarget.findMany({
+      where: {
+        OR: [
+          { name: { in: Array.from(eligibleExamTypeNames) } },
+          { id: { in: directIds } },
+        ],
+      },
+      select: { id: true },
+    });
+
+    return Array.from(new Set([...matchingTargets.map((t) => t.id), ...directIds]));
+  }
 
   /**
    * Get student profile by authenticated user ID.
@@ -227,7 +267,20 @@ export class StudentService {
         throw new BadRequestException('Selected language is not active.');
     }
 
-    // Only name and preferredLanguageId are student-editable
+    // Validate district against state if provided
+    if (dto.districtId) {
+      const targetStateId = dto.stateId || currentStudent?.stateId;
+      const dist = await this.prisma.district.findUnique({
+        where: { id: dto.districtId },
+      });
+      if (!dist) {
+        throw new NotFoundException('Selected district not found.');
+      }
+      if (targetStateId && dist.stateId && dist.stateId !== targetStateId) {
+        throw new BadRequestException('Selected district does not belong to the selected state.');
+      }
+    }
+
     const updateData: any = {};
     if (dto.name !== undefined) {
       const trimmedName = dto.name.trim();
@@ -238,6 +291,21 @@ export class StudentService {
     }
     if (dto.preferredLanguageId !== undefined) {
       updateData.preferredLanguageId = dto.preferredLanguageId;
+    }
+    if (dto.schoolCollege !== undefined) {
+      updateData.schoolCollege = dto.schoolCollege ? dto.schoolCollege.trim() : null;
+    }
+    if (dto.classId !== undefined) {
+      updateData.classId = dto.classId;
+    }
+    if (dto.examTargetId !== undefined) {
+      updateData.examTargetId = dto.examTargetId;
+    }
+    if (dto.stateId !== undefined) {
+      updateData.stateId = dto.stateId;
+    }
+    if (dto.districtId !== undefined) {
+      updateData.districtId = dto.districtId;
     }
 
     const updatedStudent = await this.prisma.student.update({
@@ -528,11 +596,9 @@ export class StudentService {
   async getStudentExams(userId: string, query: any) {
     const student = await this.prisma.student.findFirst({
       where: { OR: [{ userId }, { id: userId }] },
-      select: {
-        id: true,
-        examTargetId: true,
-        classId: true,
-        studentExamTargets: { select: { examTargetId: true } },
+      include: {
+        examTarget: true,
+        studentExamTargets: { include: { examTarget: true } },
       },
     });
 
@@ -540,12 +606,7 @@ export class StudentService {
       throw new NotFoundException(`Student profile not found for user '${userId}'`);
     }
 
-    const targetIds = Array.from(
-      new Set([
-        ...(student.studentExamTargets?.map((st) => st.examTargetId) || []),
-        ...(student.examTargetId ? [student.examTargetId] : []),
-      ]),
-    );
+    const eligibleTargetIds = await this.getEligibleExamTargetIdsForStudent(student);
 
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.max(1, Math.min(50, Number(query.limit) || 10));
@@ -564,13 +625,18 @@ export class StudentService {
       ],
     };
 
-    // Filter by Exam Target if student has one or if query specified
+    // Filter by Exam Target: enforce backend student target eligibility
     if (query.examTargetId) {
-      where.AND.push({ examTargetId: query.examTargetId });
-    } else if (targetIds.length > 0) {
+      if (eligibleTargetIds.includes(query.examTargetId)) {
+        where.AND.push({ examTargetId: query.examTargetId });
+      } else {
+        // Querying an exam target the student is not eligible for -> return no exams
+        where.AND.push({ examTargetId: '00000000-0000-0000-0000-000000000000' });
+      }
+    } else if (eligibleTargetIds.length > 0) {
       where.AND.push({
         OR: [
-          { examTargetId: { in: targetIds } },
+          { examTargetId: { in: eligibleTargetIds } },
           { examTarget: { name: 'General' } },
         ],
       });
@@ -678,8 +744,8 @@ export class StudentService {
           examTarget: { select: { id: true, name: true } },
           status: { select: { id: true, name: true } },
           schedules: {
-            where: { status: { in: ['SCHEDULED', 'ACTIVE', 'ENDED'] } },
-            orderBy: { startTime: 'desc' },
+            where: { status: { in: ['SCHEDULED', 'ACTIVE', 'RESCHEDULED', 'ENDED'] } },
+            orderBy: [{ updatedAt: 'desc' }, { startTime: 'desc' }],
             take: 1,
           },
           sections: {
@@ -806,11 +872,9 @@ export class StudentService {
   async getStudentMockTests(userId: string, query: any) {
     const student = await this.prisma.student.findFirst({
       where: { OR: [{ userId }, { id: userId }] },
-      select: {
-        id: true,
-        examTargetId: true,
-        classId: true,
-        studentExamTargets: { select: { examTargetId: true } },
+      include: {
+        examTarget: true,
+        studentExamTargets: { include: { examTarget: true } },
       },
     });
 
@@ -818,12 +882,7 @@ export class StudentService {
       throw new NotFoundException(`Student profile not found for user '${userId}'`);
     }
 
-    const targetIds = Array.from(
-      new Set([
-        ...(student.studentExamTargets?.map((st) => st.examTargetId) || []),
-        ...(student.examTargetId ? [student.examTargetId] : []),
-      ]),
-    );
+    const eligibleTargetIds = await this.getEligibleExamTargetIdsForStudent(student);
 
     const page = Math.max(1, Number(query.page) || 1);
     const limit = Math.max(1, Math.min(50, Number(query.limit) || 10));
@@ -836,12 +895,16 @@ export class StudentService {
       },
     };
 
-    // Filter by Exam Target
+    // Filter by Exam Target: enforce backend student target eligibility
     if (query.examTargetId) {
-      where.examTargetId = query.examTargetId;
-    } else if (targetIds.length > 0) {
+      if (eligibleTargetIds.includes(query.examTargetId)) {
+        where.examTargetId = query.examTargetId;
+      } else {
+        where.examTargetId = '00000000-0000-0000-0000-000000000000';
+      }
+    } else if (eligibleTargetIds.length > 0) {
       where.OR = [
-        { examTargetId: { in: targetIds } },
+        { examTargetId: { in: eligibleTargetIds } },
         { examTarget: { name: 'General' } },
       ];
     }

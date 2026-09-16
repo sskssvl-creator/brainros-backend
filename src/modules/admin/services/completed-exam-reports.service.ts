@@ -429,6 +429,12 @@ export class CompletedExamReportsService {
       where: { id: attemptId },
       include: {
         exam: true,
+        result: {
+          include: {
+            subjectResults: { include: { subject: true } },
+            chapterResults: { include: { chapter: { include: { subject: true } } } },
+          },
+        },
         student: {
           include: {
             user: { select: { id: true, email: true, phone: true } },
@@ -450,13 +456,68 @@ export class CompletedExamReportsService {
     }
 
     // 1. Fetch full persisted analysis using ResultService (pure read-only)
-    const fullAnalysis = await this.resultService.getFullAnalysis(attemptId, user);
+    const fullAnalysis = (await this.resultService.getFullAnalysis(attemptId, user)) as any;
 
     // 2. Fetch question-by-question answer review (immutable snapshot)
     const review = await this.resultService.getAnswerReview(attemptId, user);
 
     // 3. Email delivery status check
     const emailStatus = await this.getReportEmailStatus(examId, attemptId);
+
+    // 4. Normalize analysis: provide flat top-level metrics alongside nested analysis objects
+    const normalizedAnalysis = {
+      ...fullAnalysis,
+      score: fullAnalysis?.overall?.obtainedMarks ?? attempt.result?.totalScore ?? 0,
+      totalScore: fullAnalysis?.overall?.obtainedMarks ?? attempt.result?.totalScore ?? 0,
+      maxScore: fullAnalysis?.overall?.totalMarks ?? attempt.result?.maxScore ?? attempt.exam?.totalMarks ?? 0,
+      percentage: fullAnalysis?.overall?.percentage ?? attempt.result?.percentage ?? 0,
+      accuracy: fullAnalysis?.overall?.accuracy ?? attempt.result?.accuracy ?? 0,
+      correctAnswers: fullAnalysis?.overall?.correctCount ?? attempt.result?.correctAnswers ?? 0,
+      wrongAnswers: fullAnalysis?.overall?.wrongCount ?? attempt.result?.wrongAnswers ?? 0,
+      unattempted: fullAnalysis?.overall?.unattemptedCount ?? attempt.result?.unattempted ?? 0,
+      totalQuestions: fullAnalysis?.overall?.totalQuestions ?? attempt.result?.totalQuestions ?? attempt.exam?.totalQuestions ?? 0,
+      timeUsedSeconds: fullAnalysis?.overall?.timeUsedSeconds ?? fullAnalysis?.timeAnalysis?.totalTimeUsedSeconds ?? attempt.result?.timeUsedSeconds ?? 0,
+      averageTimePerQuestion: fullAnalysis?.overall?.averageTimePerQuestionSeconds ?? fullAnalysis?.timeAnalysis?.averageTimePerQuestionSeconds ?? attempt.result?.averageTimePerQuestion ?? 0,
+      quadrant: fullAnalysis?.overall?.speedAccuracyQuadrant || 'BALANCED',
+      subjectAnalysis: fullAnalysis?.subjects?.items || attempt.result?.subjectResults?.map((sr: any) => ({
+        subjectId: sr.subjectId,
+        subjectName: sr.subject?.name || 'Subject',
+        score: sr.score,
+        maxScore: sr.maxScore,
+        correct: sr.correctAnswers,
+        wrong: sr.wrongAnswers,
+        unattempted: sr.unattempted,
+        accuracy: sr.accuracy,
+        percentage: sr.percentage,
+      })) || [],
+      subjectResults: fullAnalysis?.subjects?.items || attempt.result?.subjectResults || [],
+      chapterAnalysis: fullAnalysis?.chapters?.items || attempt.result?.chapterResults?.map((cr: any) => ({
+        chapterId: cr.chapterId,
+        chapterName: cr.chapter?.name || 'Chapter',
+        subjectName: cr.chapter?.subject?.name || 'General',
+        accuracy: cr.accuracy,
+        status: cr.performanceStatus,
+        score: cr.score,
+        maxScore: cr.maxScore,
+      })) || [],
+      chapterResults: fullAnalysis?.chapters?.items || attempt.result?.chapterResults || [],
+      timeAnalysis: {
+        ...(fullAnalysis?.timeAnalysis || {}),
+        averageTimePerQuestion: fullAnalysis?.timeAnalysis?.averageTimePerQuestionSeconds ?? fullAnalysis?.overall?.averageTimePerQuestionSeconds ?? 0,
+        rushedCount: fullAnalysis?.timeAnalysis?.pacingMetrics?.rushedCount ?? fullAnalysis?.timeAnalysis?.rushedCount ?? 0,
+        optimalCount: fullAnalysis?.timeAnalysis?.pacingMetrics?.optimalPaceCount ?? fullAnalysis?.timeAnalysis?.optimalCount ?? 0,
+        overthoughtCount: fullAnalysis?.timeAnalysis?.pacingMetrics?.overthoughtCount ?? fullAnalysis?.timeAnalysis?.overthoughtCount ?? 0,
+      },
+      strategyAnalysis: {
+        ...(fullAnalysis?.attemptStrategy || {}),
+        primaryClassification: fullAnalysis?.attemptStrategy?.accuracyVsSpeedProfile || 'BALANCED',
+        confidence: 'HIGH',
+        avoidableNegativeMarks: fullAnalysis?.attemptStrategy?.negativeMarkingPenalty ?? 0,
+        projectedScore: fullAnalysis?.attemptStrategy?.scoreWithoutNegativeMarking ?? (attempt.result?.totalScore ?? 0),
+      },
+      attemptStrategy: fullAnalysis?.attemptStrategy,
+      recommendations: fullAnalysis?.recommendations || [],
+    };
 
     return {
       attemptId: attempt.id,
@@ -477,7 +538,7 @@ export class CompletedExamReportsService {
             totalCandidates: attempt.candidateRanks[0].totalCandidates,
           }
         : null,
-      analysis: fullAnalysis,
+      analysis: normalizedAnalysis,
       questionsReview: review,
       emailStatus,
     };

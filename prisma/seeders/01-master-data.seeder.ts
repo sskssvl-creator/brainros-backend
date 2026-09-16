@@ -163,10 +163,10 @@ export async function seedMasterData(ctx: SeedContext): Promise<SeederResult> {
     { name: 'JEE', description: 'Joint Entrance Examination (Engineering)' },
     { name: 'CET', description: 'Common Entrance Test (State Level)' },
     { name: 'NEET', description: 'National Eligibility cum Entrance Test (UG Medical)' },
-    { name: 'NEET and JEE', description: 'NEET and JEE Combo' },
-    { name: 'NEET and State CET', description: 'NEET and State CET Combo' },
-    { name: 'JEE and State CET', description: 'JEE and State CET Combo' },
-    { name: 'JEE, NEET and State CET', description: 'JEE, NEET and State CET All-in-One Combo' },
+    { name: 'NEET + JEE', description: 'NEET and JEE Combo' },
+    { name: 'NEET + State CET', description: 'NEET and State CET Combo' },
+    { name: 'JEE + State CET', description: 'JEE and State CET Combo' },
+    { name: 'JEE + NEET + State CET', description: 'JEE, NEET and State CET All-in-One Combo' },
   ];
 
   for (const t of targetsList) {

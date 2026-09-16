@@ -48,9 +48,16 @@ export class AiTranslationService {
    * List scheduled exams eligible for AI question paper translation
    */
   async getScheduledExams() {
+    const now = new Date();
     const schedules = await this.prisma.examSchedule.findMany({
       where: {
         status: { in: ['SCHEDULED', 'ACTIVE', 'RESCHEDULED'] },
+        endTime: { gte: now },
+        exam: {
+          status: {
+            name: { notIn: ['COMPLETED', 'ENDED', 'CANCELLED'] },
+          },
+        },
       },
       include: {
         exam: {
@@ -1023,13 +1030,35 @@ export class AiTranslationService {
           },
         });
 
-    // Enqueue BullMQ parent job with the manual questions payload for background saving & translation
+    // CRITICAL: Persist manual questions to database immediately so they are safely stored in PostgreSQL
+    let resolvedVersionId = '';
+    try {
+      resolvedVersionId = await this.saveManualQuestionsToDB(
+        aiJob.id,
+        exam.id,
+        userId,
+        dto.questions,
+      );
+      await this.prisma.aiTranslationJob.update({
+        where: { id: aiJob.id },
+        data: {
+          examVersionId: resolvedVersionId,
+          dbSaveProgress: 100,
+        } as any,
+      });
+    } catch (saveErr: any) {
+      this.logger.error(`Failed to save manual questions to database: ${saveErr.message}`, saveErr.stack);
+      throw saveErr;
+    }
+
+    // Enqueue BullMQ parent job with the manual questions payload for background AI translation
     try {
       await this.parentQueue.add(
         `ai-translation-${aiJob.id}`,
         {
           jobId: aiJob.id,
           examId: exam.id,
+          examVersionId: resolvedVersionId,
           userId,
           manualQuestionsPayload: dto,
         },
@@ -1057,7 +1086,7 @@ export class AiTranslationService {
         type: 'AI Question Paper Translation',
         userId,
         examId: exam.id,
-        message: `Queued ${dto.questions.length} questions for database save and AI translation.`,
+        message: `Queued ${dto.questions.length} questions for AI translation.`,
       },
     );
 
@@ -1419,5 +1448,385 @@ export class AiTranslationService {
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       fileName: 'sample_ai_question_paper_template.xlsx',
     };
+  }
+
+  /**
+   * Saves manually entered questions to the PostgreSQL database.
+   * Creates: ExamVersion, Question, QuestionOption (with correct isCorrect=true),
+   * ExamQuestion, ExamVersionQuestion, ExamVersionOption, ExamVersionTranslation.
+   * Returns the created ExamVersion ID.
+   */
+  async saveManualQuestionsToDB(
+    jobId: string,
+    examId: string,
+    userId: string,
+    questions: any[],
+  ): Promise<string> {
+    const exam = await this.prisma.exam.findUnique({
+      where: { id: examId },
+      include: {
+        examTarget: true,
+        sections: { include: { subject: true }, orderBy: { displayOrder: 'asc' } },
+      },
+    });
+    if (!exam) throw new Error(`Exam ${examId} not found during manual question DB save.`);
+
+    // Resolve default subject for the exam's target
+    let defaultSubject = await this.prisma.subject.findFirst({
+      where: exam.examTargetId
+        ? { examTargetSubjects: { some: { examTargetId: exam.examTargetId } } }
+        : undefined,
+    });
+    if (!defaultSubject) defaultSubject = await this.prisma.subject.findFirst();
+    if (!defaultSubject) {
+      defaultSubject = await this.prisma.subject.create({
+        data: { name: 'Physics', code: 'PHY' },
+      });
+    }
+
+    let defaultChapter = await this.prisma.chapter.findFirst({
+      where: { subjectId: defaultSubject.id },
+    });
+    if (!defaultChapter) {
+      defaultChapter = await this.prisma.chapter.create({
+        data: { subjectId: defaultSubject.id, name: 'General Chapter', code: 'GEN-01' },
+      });
+    }
+
+    const defaultLanguage =
+      (await this.prisma.preferredLanguage.findFirst({ where: { code: 'en' } })) ||
+      (await this.prisma.preferredLanguage.findFirst());
+    const defaultLangId = defaultLanguage?.id || null;
+
+    const marksPerQ = (exam as any).defaultMarksPerQuestion || 4;
+    const negMarks = (exam as any).defaultNegativeMarks || 1;
+
+    // ── Clean up existing version questions & reuse ExamVersion safely ──
+    const existingVersions = await this.prisma.examVersion.findMany({
+      where: { examId: exam.id },
+      orderBy: { versionNumber: 'asc' },
+    });
+    const versionIds = existingVersions.map((v) => v.id);
+
+    if (versionIds.length > 0) {
+      const evQIds = (
+        await this.prisma.examVersionQuestion.findMany({
+          where: { examVersionId: { in: versionIds } },
+          select: { id: true },
+        })
+      ).map((q) => q.id);
+
+      if (evQIds.length > 0) {
+        await this.prisma.examVersionOptionTranslation.deleteMany({
+          where: { option: { examVersionQuestionId: { in: evQIds } } },
+        });
+        await this.prisma.examVersionTranslation.deleteMany({
+          where: { examVersionQuestionId: { in: evQIds } },
+        });
+        await this.prisma.examVersionOption.deleteMany({
+          where: { examVersionQuestionId: { in: evQIds } },
+        });
+        await this.prisma.examVersionQuestion.deleteMany({
+          where: { examVersionId: { in: versionIds } },
+        });
+      }
+    }
+
+    let examVersion: any;
+    if (existingVersions.length > 0) {
+      examVersion = await this.prisma.examVersion.update({
+        where: { id: existingVersions[0].id },
+        data: {
+          status: 'GENERATED',
+          totalQuestions: questions.length,
+          durationMinutes: exam.durationMinutes || 60,
+          totalMarks: questions.length * marksPerQ,
+        },
+      });
+
+      if (existingVersions.length > 1) {
+        const extraVersionIds = existingVersions.slice(1).map((v) => v.id);
+        await this.prisma.examSchedule.updateMany({
+          where: { examVersionId: { in: extraVersionIds } },
+          data: { examVersionId: examVersion.id },
+        });
+        await this.prisma.examVersion.deleteMany({
+          where: { id: { in: extraVersionIds } },
+        });
+      }
+    } else {
+      examVersion = await this.prisma.examVersion.create({
+        data: {
+          examId: exam.id,
+          versionNumber: 1,
+          status: 'GENERATED',
+          totalQuestions: questions.length,
+          durationMinutes: exam.durationMinutes || 60,
+          totalMarks: questions.length * marksPerQ,
+          generatedById: userId,
+        },
+      });
+    }
+
+    // Clean up previous master question links
+    const prevExamQs = await this.prisma.examQuestion.findMany({
+      where: { examId: exam.id },
+      select: { questionId: true },
+    });
+    const prevQIds = prevExamQs.map((eq) => eq.questionId);
+    if (prevQIds.length > 0) {
+      await this.prisma.examQuestion.deleteMany({ where: { examId: exam.id } });
+      const stillLinked = await this.prisma.examQuestion.findMany({
+        where: { questionId: { in: prevQIds } },
+        select: { questionId: true },
+      });
+      const stillLinkedSet = new Set(stillLinked.map((e) => e.questionId));
+      const deletable = prevQIds.filter((id) => !stillLinkedSet.has(id));
+      if (deletable.length > 0) {
+        await this.prisma.questionOptionTranslation.deleteMany({
+          where: { option: { questionId: { in: deletable } } },
+        });
+        await this.prisma.questionTranslation.deleteMany({ where: { questionId: { in: deletable } } });
+        await this.prisma.questionOption.deleteMany({ where: { questionId: { in: deletable } } });
+        await this.prisma.question.deleteMany({ where: { id: { in: deletable } } });
+      }
+    }
+
+    // Ensure ExamSection exists
+    let examSection = exam.sections[0] as any;
+    if (!examSection) {
+      examSection = await this.prisma.examSection.create({
+        data: {
+          examId: exam.id,
+          subjectId: defaultSubject.id,
+          name: 'Section A',
+          totalQuestions: questions.length,
+          displayOrder: 1,
+        } as any,
+      });
+    }
+
+    const totalQ = questions.length;
+    const REPORT_INTERVAL = Math.max(1, Math.ceil(totalQ / 10));
+
+    for (let idx = 0; idx < questions.length; idx++) {
+      const qData = questions[idx];
+      const seqNum = idx + 1;
+
+      const qType = qData.type || 'SINGLE_CORRECT';
+      const qDifficulty = qData.difficulty || 'MEDIUM';
+
+      // Create master Question
+      const masterQ = await this.prisma.question.create({
+        data: {
+          subjectId: defaultSubject.id,
+          chapterId: defaultChapter.id,
+          ...(defaultLangId ? { defaultLanguageId: defaultLangId } : {}),
+          type: qType as any,
+          difficultyLevel: qDifficulty as any,
+          marks: marksPerQ,
+          negativeMarks: negMarks,
+          assertion: qType === 'ASSERTION_REASON' ? qData.assertion || null : null,
+          reason: qType === 'ASSERTION_REASON' ? qData.reason || null : null,
+          createdById: userId,
+          isActive: true,
+        } as any,
+      });
+
+      // English translation for the question text
+      if (defaultLangId) {
+        await this.prisma.questionTranslation.create({
+          data: {
+            questionId: masterQ.id,
+            languageId: defaultLangId,
+            questionText: qData.questionText,
+            assertionText: qType === 'ASSERTION_REASON' ? qData.assertion || null : null,
+            reasonText: qType === 'ASSERTION_REASON' ? qData.reason || null : null,
+            explanation: qData.explanation || null,
+          },
+        });
+      }
+
+      // Create options if applicable (non-numerical)
+      const createdOpts: any[] = [];
+      if (qType !== 'NUMERICAL') {
+        const optDefs = [
+          { key: 'A', text: qData.optionA || '' },
+          { key: 'B', text: qData.optionB || '' },
+          { key: 'C', text: qData.optionC || '' },
+          { key: 'D', text: qData.optionD || '' },
+        ];
+
+        const multiCorrect = Array.isArray(qData.correctAnswers)
+          ? qData.correctAnswers
+          : typeof qData.correctAnswer === 'string'
+          ? qData.correctAnswer.split(/[\s,]+/).filter(Boolean)
+          : [];
+
+        for (let oIdx = 0; oIdx < optDefs.length; oIdx++) {
+          const optDef = optDefs[oIdx];
+          const isCorrect =
+            qType === 'MULTIPLE_CORRECT'
+              ? multiCorrect.includes(optDef.key)
+              : optDef.key === qData.correctAnswer;
+
+          const opt = await this.prisma.questionOption.create({
+            data: {
+              questionId: masterQ.id,
+              optionKey: optDef.key,
+              optionLabel: optDef.key,
+              optionText: optDef.text,
+              isCorrect,
+              displayOrder: oIdx + 1,
+            },
+          });
+          createdOpts.push(opt);
+        }
+      }
+
+      // Create QuestionAnswer record
+      const correctOptionIds = createdOpts.filter((o) => o.isCorrect).map((o) => o.id);
+      await this.prisma.questionAnswer.create({
+        data: {
+          questionId: masterQ.id,
+          answerType: qType as any,
+          correctOptionIds: correctOptionIds.length > 0 ? correctOptionIds : undefined,
+          numericalAnswer:
+            qType === 'NUMERICAL' && qData.numericalAnswer !== undefined && qData.numericalAnswer !== null
+              ? parseFloat(String(qData.numericalAnswer))
+              : null,
+        } as any,
+      });
+
+      // Link to exam
+      await this.prisma.examQuestion.create({
+        data: {
+          examId: exam.id,
+          sectionId: examSection.id,
+          questionId: masterQ.id,
+          displayOrder: seqNum,
+          marks: marksPerQ,
+          negativeMarks: negMarks,
+        } as any,
+      });
+
+      // Prepare snapshot correctAnswer object
+      let snapshotCorrectAnswer: any = null;
+      if (qType === 'NUMERICAL') {
+        snapshotCorrectAnswer = {
+          numericalAnswer:
+            qData.numericalAnswer !== undefined && qData.numericalAnswer !== null
+              ? parseFloat(String(qData.numericalAnswer))
+              : null,
+        };
+      } else if (qType === 'MULTIPLE_CORRECT') {
+        const multiCorrect = Array.isArray(qData.correctAnswers)
+          ? qData.correctAnswers
+          : typeof qData.correctAnswer === 'string'
+          ? qData.correctAnswer.split(/[\s,]+/).filter(Boolean)
+          : [];
+        snapshotCorrectAnswer = { keys: multiCorrect };
+      } else {
+        snapshotCorrectAnswer = { key: qData.correctAnswer };
+      }
+
+      // ExamVersionQuestion snapshot
+      const evq = await this.prisma.examVersionQuestion.create({
+        data: {
+          examVersionId: examVersion.id,
+          sourceQuestionId: masterQ.id,
+          sequenceNumber: seqNum,
+          sectionName: (examSection as any).name || 'Section A',
+          subjectName: defaultSubject.name,
+          type: qType as any,
+          difficultyLevel: qDifficulty as any,
+          marks: marksPerQ,
+          negativeMarks: negMarks,
+          assertion: qType === 'ASSERTION_REASON' ? qData.assertion || null : null,
+          reason: qType === 'ASSERTION_REASON' ? qData.reason || null : null,
+          questionText: qData.questionText,
+          explanation: qData.explanation || null,
+          correctAnswer: snapshotCorrectAnswer,
+        } as any,
+      });
+
+      // English translation snapshot
+      if (defaultLangId) {
+        await this.prisma.examVersionTranslation.create({
+          data: {
+            examVersionQuestionId: evq.id,
+            languageId: defaultLangId,
+            languageCode: 'en',
+            questionText: qData.questionText,
+            explanation: qData.explanation || null,
+          },
+        });
+      }
+
+      // ExamVersionOption snapshots (isCorrect propagated)
+      for (let oIdx = 0; oIdx < createdOpts.length; oIdx++) {
+        const opt = createdOpts[oIdx];
+        await this.prisma.examVersionOption.create({
+          data: {
+            examVersionQuestionId: evq.id,
+            sourceOptionId: opt.id,
+            displayOrder: oIdx + 1,
+            optionKey: opt.optionKey,
+            optionLabel: opt.optionLabel,
+            optionText: opt.optionText || '',
+            isCorrect: opt.isCorrect,
+          },
+        });
+      }
+
+      // Report dbSaveProgress every REPORT_INTERVAL or on the last question
+      if ((idx + 1) % REPORT_INTERVAL === 0 || idx === totalQ - 1) {
+        const dbPct = Math.round(((idx + 1) / totalQ) * 100);
+        await this.prisma.aiTranslationJob.update({
+          where: { id: jobId },
+          data: { dbSaveProgress: dbPct } as any,
+        });
+        await this.jobProgressService.publishProgress(
+          AI_TRANSLATION_QUEUE,
+          jobId,
+          idx + 1,
+          totalQ,
+          {
+            stage: 'DB_SAVE',
+            message: `Saving English questions: ${idx + 1} of ${totalQ}...`,
+            dbSaveProgress: dbPct,
+            phase: 'DB_SAVE',
+          },
+        );
+      }
+    }
+
+    // Update exam totals
+    await this.prisma.exam.update({
+      where: { id: exam.id },
+      data: { totalQuestions: questions.length, totalMarks: questions.length * marksPerQ },
+    });
+
+    // Link schedule to new version and mark answer key ready
+    await this.prisma.examSchedule.updateMany({
+      where: { examId: exam.id },
+      data: {
+        examVersionId: examVersion.id,
+        hasAnswerKey: true,
+        answerKeyUploadedAt: new Date(),
+        answerKeyUploadedById: userId,
+      } as any,
+    });
+
+    // Ensure English default language link
+    if (defaultLangId) {
+      await this.prisma.examLanguage.upsert({
+        where: { examId_languageId: { examId: exam.id, languageId: defaultLangId } },
+        create: { examId: exam.id, languageId: defaultLangId, isDefault: true, displayOrder: 1 },
+        update: { isDefault: true },
+      });
+    }
+
+    return examVersion.id;
   }
 }

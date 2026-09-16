@@ -7,7 +7,7 @@ import { Roles } from '../../auth/decorators/roles.decorator';
 
 @Controller('super-admin/registrations')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('SUPER_ADMIN', 'ADMIN')
+@Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER', 'OPERATOR')
 export class SuperAdminRegistrationsController {
   constructor(private readonly studentsService: AdminStudentsService) {}
 

@@ -137,32 +137,32 @@ export class ExamPaperValidatorService {
         rowWarnings.push('Option C and Option D are missing for this question.');
       }
 
-      // 4. Validate Correct Answer (A, B, C, D)
+      // 4. Validate Correct Answer (A, B, C, D) if provided
       const rawAns = (row.correctAnswer || '').trim().toUpperCase();
       const qNumLabel = row.questionNumber ? `question ${row.questionNumber}` : `row ${row.rowNumber}`;
       const qType = (row.questionType || 'SINGLE_CORRECT').toUpperCase();
 
-      if (!rawAns) {
-        rowErrors.push(`Correct Answer (correct_answer) is required for ${qNumLabel}.`);
-      } else if (qType === 'SINGLE_CORRECT') {
-        if (!['A', 'B', 'C', 'D'].includes(rawAns)) {
-          rowErrors.push(
-            `Invalid correct answer '${row.correctAnswer}' for ${qNumLabel}. Must be one of A, B, C, D.`,
-          );
-        } else {
-          if (rawAns === 'A' && !optA) {
-            rowErrors.push(`Option A is empty but Correct Answer is A for ${qNumLabel}.`);
-          } else if (rawAns === 'B' && !optB) {
-            rowErrors.push(`Option B is empty but Correct Answer is B for ${qNumLabel}.`);
-          } else if (rawAns === 'C' && !optC) {
-            rowErrors.push(`Option C is empty but Correct Answer is C for ${qNumLabel}.`);
-          } else if (rawAns === 'D' && !optD) {
-            rowErrors.push(`Option D is empty but Correct Answer is D for ${qNumLabel}.`);
+      if (rawAns) {
+        if (qType === 'SINGLE_CORRECT') {
+          if (!['A', 'B', 'C', 'D'].includes(rawAns)) {
+            rowErrors.push(
+              `Invalid correct answer '${row.correctAnswer}' for ${qNumLabel}. Must be one of A, B, C, D.`,
+            );
+          } else {
+            if (rawAns === 'A' && !optA) {
+              rowErrors.push(`Option A is empty but Correct Answer is A for ${qNumLabel}.`);
+            } else if (rawAns === 'B' && !optB) {
+              rowErrors.push(`Option B is empty but Correct Answer is B for ${qNumLabel}.`);
+            } else if (rawAns === 'C' && !optC) {
+              rowErrors.push(`Option C is empty but Correct Answer is C for ${qNumLabel}.`);
+            } else if (rawAns === 'D' && !optD) {
+              rowErrors.push(`Option D is empty but Correct Answer is D for ${qNumLabel}.`);
+            }
           }
-        }
-      } else if (qType === 'NUMERICAL') {
-        if (isNaN(Number(rawAns))) {
-          rowErrors.push(`Numerical answer required for ${qNumLabel}.`);
+        } else if (qType === 'NUMERICAL') {
+          if (isNaN(Number(rawAns))) {
+            rowErrors.push(`Numerical answer required for ${qNumLabel}.`);
+          }
         }
       }
 

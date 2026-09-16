@@ -521,6 +521,8 @@ export class ExamScheduleService {
       });
     }
 
+    await this.examCacheService?.invalidateStudentDashboards?.();
+
     return scheduled;
   }
 
@@ -1100,6 +1102,8 @@ export class ExamScheduleService {
       });
     }
 
+    await this.examCacheService?.invalidateStudentDashboards?.();
+
     return scheduleRecord;
   }
 
@@ -1114,7 +1118,7 @@ export class ExamScheduleService {
         status: true,
         sections: { include: { subject: true } },
         languages: { include: { language: true } },
-        schedules: { orderBy: { createdAt: 'desc' }, take: 1 },
+        schedules: { orderBy: [{ updatedAt: 'desc' }, { startTime: 'desc' }], take: 1 },
       },
     });
 
@@ -1351,6 +1355,8 @@ export class ExamScheduleService {
         this.logger.warn(`[RescheduleExam] WhatsApp reminder reschedule error (non-blocking): ${reminderErr.message}`);
       });
     }
+
+    await this.examCacheService?.invalidateStudentDashboards?.();
 
     return updated;
   }

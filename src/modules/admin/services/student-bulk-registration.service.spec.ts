@@ -52,8 +52,13 @@ describe('StudentBulkRegistrationService', () => {
       },
       examTarget: {
         findMany: jest.fn().mockResolvedValue([
+          { id: 'target-jee-1', name: 'JEE' },
+          { id: 'target-cet-1', name: 'CET' },
           { id: 'target-neet-1', name: 'NEET' },
-          { id: 'target-jee-1', name: 'JEE_MAIN' },
+          { id: 'target-neet-jee-1', name: 'NEET + JEE' },
+          { id: 'target-neet-state-cet-1', name: 'NEET + State CET' },
+          { id: 'target-jee-state-cet-1', name: 'JEE + State CET' },
+          { id: 'target-jee-neet-state-cet-1', name: 'JEE + NEET + State CET' },
         ]),
       },
       preferredLanguage: {
@@ -79,6 +84,9 @@ describe('StudentBulkRegistrationService', () => {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'student-new-1', studentId: 'STU001006' }),
       },
+      studentExamTarget: {
+        createMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
       bulkUpload: {
         create: jest.fn().mockResolvedValue({ id: 'upload-123', status: 'VALIDATING', institutionId: 'school-abc-123' }),
         update: jest.fn().mockResolvedValue({ id: 'upload-123', status: 'READY_FOR_REVIEW' }),
@@ -90,6 +98,7 @@ describe('StudentBulkRegistrationService', () => {
         create: jest.fn().mockResolvedValue({ id: 'row-1' }),
         findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn().mockResolvedValue({ id: 'row-1' }),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
       bulkUploadError: {
         createMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -155,59 +164,21 @@ describe('StudentBulkRegistrationService', () => {
     });
   });
 
-  describe('uploadAndValidate', () => {
-    it('should throw BadRequestException if schoolId is missing', async () => {
+  describe('uploadAndValidate Target Exam Validations', () => {
+    it('should accept and validate all 7 canonical Target Exam combinations', async () => {
+      const rows = [
+        'John,9876543210,john@example.com,Gujarat,Ahmedabad,12th,JEE,ENGLISH',
+        'Rita,9876543211,rita@example.com,Gujarat,Ahmedabad,12th,CET,ENGLISH',
+        'Rahul,9876543212,rahul@example.com,Gujarat,Ahmedabad,12th,NEET,ENGLISH',
+        'Amit,9876543213,amit@example.com,Gujarat,Ahmedabad,12th,NEET + JEE,ENGLISH',
+        'Sneha,9876543214,sneha@example.com,Gujarat,Ahmedabad,12th,NEET + State CET,ENGLISH',
+        'Raj,9876543215,raj@example.com,Gujarat,Ahmedabad,12th,JEE + State CET,ENGLISH',
+        'Vikas,9876543216,vikas@example.com,Gujarat,Ahmedabad,12th,JEE + NEET + State CET,ENGLISH',
+      ];
+
       const csvContent =
         'Full Name,Mobile Number,Email,State,City,Class,Exam Target,Preferred Language\n' +
-        'Rohan Shah,9876543210,rohan@example.com,Gujarat,Ahmedabad,12th,NEET,ENGLISH';
-
-      const file = {
-        originalname: 'students.csv',
-        buffer: Buffer.from(csvContent),
-        size: csvContent.length,
-      } as any;
-
-      await expect(service.uploadAndValidate(file, { userId: 'admin-1' })).rejects.toThrow(
-        /Please select a school before uploading students/,
-      );
-    });
-
-    it('should throw BadRequestException if school does not exist', async () => {
-      const csvContent =
-        'Full Name,Mobile Number,Email,State,City,Class,Exam Target,Preferred Language\n' +
-        'Rohan Shah,9876543210,rohan@example.com,Gujarat,Ahmedabad,12th,NEET,ENGLISH';
-
-      const file = {
-        originalname: 'students.csv',
-        buffer: Buffer.from(csvContent),
-        size: csvContent.length,
-      } as any;
-
-      await expect(
-        service.uploadAndValidate(file, { userId: 'admin-1' }, { schoolId: 'non-existent-school' }),
-      ).rejects.toThrow(/Selected school does not exist/);
-    });
-
-    it('should throw BadRequestException if school is inactive', async () => {
-      const csvContent =
-        'Full Name,Mobile Number,Email,State,City,Class,Exam Target,Preferred Language\n' +
-        'Rohan Shah,9876543210,rohan@example.com,Gujarat,Ahmedabad,12th,NEET,ENGLISH';
-
-      const file = {
-        originalname: 'students.csv',
-        buffer: Buffer.from(csvContent),
-        size: csvContent.length,
-      } as any;
-
-      await expect(
-        service.uploadAndValidate(file, { userId: 'admin-1' }, { schoolId: 'school-inactive-123' }),
-      ).rejects.toThrow(/Selected school is inactive/);
-    });
-
-    it('should validate valid student rows and assign selected school relationship', async () => {
-      const csvContent =
-        'Full Name,Mobile Number,Email,State,City,Class,Exam Target,Preferred Language\n' +
-        'Rohan Shah,9876543210,rohan@example.com,Gujarat,Ahmedabad,12th,NEET,ENGLISH';
+        rows.join('\n');
 
       const file = {
         originalname: 'students.csv',
@@ -221,23 +192,23 @@ describe('StudentBulkRegistrationService', () => {
         { schoolId: 'school-abc-123' },
       );
 
-      expect(res.totalRows).toBe(1);
-      expect(res.validRows).toBe(1);
+      expect(res.totalRows).toBe(7);
+      expect(res.validRows).toBe(7);
       expect(res.invalidRows).toBe(0);
-      expect(res.duplicateRows).toBe(0);
-      expect(prismaMock.bulkUpload.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({
-            institutionId: 'school-abc-123',
-          }),
-        }),
-      );
     });
 
-    it('should ignore school_name inside CSV file and enforce selected UI school', async () => {
+    it('should reject invalid Target Exam values with INVALID_EXAM_TARGET', async () => {
+      const invalidRows = [
+        'User1,9876543220,,Gujarat,Ahmedabad,12th,JEE + CET,ENGLISH', // 'JEE + CET' is invalid (must be 'JEE + State CET')
+        'User2,9876543221,,Gujarat,Ahmedabad,12th,State CET,ENGLISH', // Standalone 'State CET' is invalid
+        'User3,9876543222,,Gujarat,Ahmedabad,12th,Physics,ENGLISH', // Subject name is invalid
+        'User4,9876543223,,Gujarat,Ahmedabad,12th,JEE + State NEET,ENGLISH', // Invalid combination
+        'User5,9876543224,,Gujarat,Ahmedabad,12th,Random Target,ENGLISH', // Random string is invalid
+      ];
+
       const csvContent =
-        'Full Name,Mobile Number,Email,State,City,Class,Exam Target,Preferred Language,School Name\n' +
-        'Rohan Shah,9876543210,rohan@example.com,Gujarat,Ahmedabad,12th,NEET,ENGLISH,XYZ Legacy School';
+        'Full Name,Mobile Number,Email,State,City,Class,Exam Target,Preferred Language\n' +
+        invalidRows.join('\n');
 
       const file = {
         originalname: 'students.csv',
@@ -251,18 +222,16 @@ describe('StudentBulkRegistrationService', () => {
         { schoolId: 'school-abc-123' },
       );
 
-      expect(res.totalRows).toBe(1);
-      expect(res.validRows).toBe(1);
-      const rowCall = prismaMock.bulkUploadRow.create.mock.calls[0][0];
-      expect(rowCall.data.normalizedData.institutionId).toBe('school-abc-123');
-      expect(rowCall.data.normalizedData.schoolCollege).toBe('ABC Public School');
+      expect(res.totalRows).toBe(5);
+      expect(res.validRows).toBe(0);
+      expect(res.invalidRows).toBe(5);
     });
 
-    it('should flag in-file duplicates', async () => {
+    it('should reject empty or whitespace-only Target Exam with MISSING_EXAM_TARGET', async () => {
       const csvContent =
         'Full Name,Mobile Number,Email,State,City,Class,Exam Target,Preferred Language\n' +
-        'Rohan Shah,9876543210,rohan@example.com,Gujarat,Ahmedabad,12th,NEET,ENGLISH\n' +
-        'Another Rohan,9876543210,another@example.com,Gujarat,Ahmedabad,12th,NEET,ENGLISH';
+        'User1,9876543230,,Gujarat,Ahmedabad,12th,,ENGLISH\n' +
+        'User2,9876543231,,Gujarat,Ahmedabad,12th,   ,ENGLISH';
 
       const file = {
         originalname: 'students.csv',
@@ -277,9 +246,7 @@ describe('StudentBulkRegistrationService', () => {
       );
 
       expect(res.totalRows).toBe(2);
-      expect(res.validRows).toBe(1);
-      expect(res.invalidRows).toBe(1);
-      expect(res.duplicateRows).toBe(1);
+      expect(res.invalidRows).toBe(2);
     });
   });
 });

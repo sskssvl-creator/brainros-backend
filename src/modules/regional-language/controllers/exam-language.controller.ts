@@ -24,7 +24,7 @@ export class ExamLanguageController {
    */
   @Get()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('STUDENT', 'ADMIN', 'SUPER_ADMIN')
+  @Roles('STUDENT', 'ADMIN', 'SUPER_ADMIN', 'GENERAL_MANAGER', 'MANAGER', 'OPERATOR')
   getExamLanguages(@Param('examId') examId: string) {
     return this.examLanguageService.getExamLanguages(examId);
   }
@@ -35,7 +35,7 @@ export class ExamLanguageController {
    */
   @Put()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'SUPER_ADMIN')
+  @Roles('ADMIN', 'SUPER_ADMIN', 'GENERAL_MANAGER', 'MANAGER', 'OPERATOR')
   @HttpCode(HttpStatus.OK)
   setExamLanguages(
     @Param('examId') examId: string,

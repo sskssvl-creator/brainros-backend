@@ -77,6 +77,7 @@ describe('Exam Scheduling & Activation Engine', () => {
           useValue: {
             cachePublishedExamData: jest.fn().mockResolvedValue(undefined),
             getExamSnapshot: jest.fn().mockResolvedValue(null),
+            invalidateStudentDashboards: jest.fn().mockResolvedValue(undefined),
           },
         },
         {

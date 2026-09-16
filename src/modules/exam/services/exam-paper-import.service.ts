@@ -2260,33 +2260,36 @@ export class ExamPaperImportService {
     const limit = query.limit ? Math.min(Math.max(1, Number(query.limit)), 100) : 10;
     const skip = (page - 1) * limit;
 
-    const where: any = {};
+    const andConditions: any[] = [];
+    const now = new Date();
 
     if (query.search && query.search.trim()) {
-      where.OR = [
-        { title: { contains: query.search.trim(), mode: 'insensitive' } },
-        { description: { contains: query.search.trim(), mode: 'insensitive' } },
-        {
-          sections: {
-            some: {
-              name: { contains: query.search.trim(), mode: 'insensitive' },
+      andConditions.push({
+        OR: [
+          { title: { contains: query.search.trim(), mode: 'insensitive' } },
+          { description: { contains: query.search.trim(), mode: 'insensitive' } },
+          {
+            sections: {
+              some: {
+                name: { contains: query.search.trim(), mode: 'insensitive' },
+              },
             },
           },
-        },
-      ];
+        ],
+      });
     }
 
     if (query.status && query.status !== 'ALL') {
-      where.status = { name: query.status };
+      andConditions.push({ status: { name: query.status } });
     }
 
     if (query.type && query.type !== 'ALL') {
       if (query.type === 'MOCK') {
-        where.title = { contains: 'Mock', mode: 'insensitive' };
+        andConditions.push({ title: { contains: 'Mock', mode: 'insensitive' } });
       } else if (query.type === 'SUBJECT_MOCK') {
-        where.sections = { some: {} };
+        andConditions.push({ sections: { some: {} } });
       } else if (query.type === 'LIVE') {
-        where.NOT = { title: { contains: 'Mock', mode: 'insensitive' } };
+        andConditions.push({ NOT: { title: { contains: 'Mock', mode: 'insensitive' } } });
       }
     }
 
@@ -2294,8 +2297,41 @@ export class ExamPaperImportService {
       query.missingQuestionPaperOnly === true ||
       query.missingQuestionPaperOnly === 'true'
     ) {
-      where.examQuestions = { none: {} };
+      andConditions.push({ examQuestions: { none: {} } });
     }
+
+    // By default or when notConductedOnly is requested, only show exams that have not been conducted yet:
+    // Exclude completed/ended status and exams whose live schedule window is in the past
+    const shouldFilterNotConducted =
+      query.notConductedOnly === true ||
+      query.notConductedOnly === 'true' ||
+      query.excludeCompleted === true ||
+      query.excludeCompleted === 'true' ||
+      !query.status ||
+      query.status === 'ALL';
+
+    if (shouldFilterNotConducted && query.status !== 'COMPLETED' && query.status !== 'ENDED') {
+      andConditions.push({
+        status: { name: { notIn: ['COMPLETED', 'ENDED', 'CANCELLED'] } },
+      });
+      andConditions.push({
+        OR: [
+          // 1. Exam has no schedule yet (unscheduled draft / approved exam not yet conducted)
+          { schedules: { none: {} } },
+          // 2. Exam has a schedule that is upcoming or currently live (endTime >= now and not completed/ended)
+          {
+            schedules: {
+              some: {
+                endTime: { gte: now },
+                status: { notIn: ['ENDED', 'CANCELLED'] },
+              },
+            },
+          },
+        ],
+      });
+    }
+
+    const where: any = andConditions.length > 0 ? { AND: andConditions } : {};
 
     const sortBy = query.sortBy || 'createdAt';
     const sortOrder: 'asc' | 'desc' = query.sortOrder === 'asc' ? 'asc' : 'desc';
@@ -2555,7 +2591,16 @@ export class ExamPaperImportService {
       );
     }
 
-    // Detailed question and option validation
+    // Detailed question, difficulty, and type-specific validation
+    const validDifficulties = ['EASY', 'MEDIUM', 'HARD', 'VERY_HARD'];
+    const validTypes = [
+      'SINGLE_CORRECT',
+      'MULTIPLE_CORRECT',
+      'NUMERICAL',
+      'ASSERTION_REASON',
+      'MATCH_FOLLOWING',
+    ];
+
     for (let i = 0; i < dto.questions.length; i++) {
       const q = dto.questions[i];
       const qNum = i + 1;
@@ -2563,32 +2608,91 @@ export class ExamPaperImportService {
       if (!q.questionText || !q.questionText.trim()) {
         throw new BadRequestException(`Question ${qNum}: Question text is required.`);
       }
-      if (!q.optionA || !q.optionA.trim()) {
-        throw new BadRequestException(`Question ${qNum}: Option A is required.`);
-      }
-      if (!q.optionB || !q.optionB.trim()) {
-        throw new BadRequestException(`Question ${qNum}: Option B is required.`);
-      }
-      if (!q.optionC || !q.optionC.trim()) {
-        throw new BadRequestException(`Question ${qNum}: Option C is required.`);
-      }
-      if (!q.optionD || !q.optionD.trim()) {
-        throw new BadRequestException(`Question ${qNum}: Option D is required.`);
-      }
-      if (!q.correctAnswer || !['A', 'B', 'C', 'D'].includes(q.correctAnswer)) {
-        throw new BadRequestException(`Question ${qNum}: Correct answer must be A, B, C, or D.`);
+
+      if (!q.difficulty || !validDifficulties.includes(q.difficulty)) {
+        throw new BadRequestException(
+          `Question ${qNum}: Difficulty is required and must be one of: ${validDifficulties.join(', ')}.`,
+        );
       }
 
-      const optMap: Record<string, string> = {
-        A: q.optionA.trim(),
-        B: q.optionB.trim(),
-        C: q.optionC.trim(),
-        D: q.optionD.trim(),
-      };
-      if (!optMap[q.correctAnswer]) {
+      const qType = q.type || 'SINGLE_CORRECT';
+      if (!validTypes.includes(qType)) {
         throw new BadRequestException(
-          `Question ${qNum}: Correct answer '${q.correctAnswer}' corresponds to an empty option.`,
+          `Question ${qNum}: Question Type is required and must be one of: ${validTypes.join(', ')}.`,
         );
+      }
+
+      switch (qType) {
+        case 'SINGLE_CORRECT': {
+          if (!q.optionA || !q.optionA.trim()) throw new BadRequestException(`Question ${qNum}: Option A is required.`);
+          if (!q.optionB || !q.optionB.trim()) throw new BadRequestException(`Question ${qNum}: Option B is required.`);
+          if (!q.optionC || !q.optionC.trim()) throw new BadRequestException(`Question ${qNum}: Option C is required.`);
+          if (!q.optionD || !q.optionD.trim()) throw new BadRequestException(`Question ${qNum}: Option D is required.`);
+          if (!q.correctAnswer || !['A', 'B', 'C', 'D'].includes(q.correctAnswer)) {
+            throw new BadRequestException(`Question ${qNum}: Correct answer must be A, B, C, or D.`);
+          }
+          break;
+        }
+
+        case 'MULTIPLE_CORRECT': {
+          if (!q.optionA || !q.optionA.trim()) throw new BadRequestException(`Question ${qNum}: Option A is required.`);
+          if (!q.optionB || !q.optionB.trim()) throw new BadRequestException(`Question ${qNum}: Option B is required.`);
+          if (!q.optionC || !q.optionC.trim()) throw new BadRequestException(`Question ${qNum}: Option C is required.`);
+          if (!q.optionD || !q.optionD.trim()) throw new BadRequestException(`Question ${qNum}: Option D is required.`);
+          const ansArr = Array.isArray(q.correctAnswers)
+            ? q.correctAnswers
+            : typeof q.correctAnswer === 'string'
+            ? q.correctAnswer.split(/[\s,]+/).filter(Boolean)
+            : [];
+          if (ansArr.length === 0 || !ansArr.every((a: string) => ['A', 'B', 'C', 'D'].includes(a))) {
+            throw new BadRequestException(`Question ${qNum}: Multiple correct answers must contain at least one valid option (A, B, C, D).`);
+          }
+          break;
+        }
+
+        case 'NUMERICAL': {
+          if (
+            q.numericalAnswer === undefined ||
+            q.numericalAnswer === null ||
+            q.numericalAnswer === '' ||
+            isNaN(Number(q.numericalAnswer))
+          ) {
+            throw new BadRequestException(`Question ${qNum}: Valid numerical answer is required.`);
+          }
+          break;
+        }
+
+        case 'ASSERTION_REASON': {
+          if (!q.assertion || !q.assertion.trim()) throw new BadRequestException(`Question ${qNum}: Assertion statement is required.`);
+          if (!q.reason || !q.reason.trim()) throw new BadRequestException(`Question ${qNum}: Reason statement is required.`);
+          if (!q.optionA || !q.optionA.trim()) throw new BadRequestException(`Question ${qNum}: Option A is required.`);
+          if (!q.optionB || !q.optionB.trim()) throw new BadRequestException(`Question ${qNum}: Option B is required.`);
+          if (!q.optionC || !q.optionC.trim()) throw new BadRequestException(`Question ${qNum}: Option C is required.`);
+          if (!q.optionD || !q.optionD.trim()) throw new BadRequestException(`Question ${qNum}: Option D is required.`);
+          if (!q.correctAnswer || !['A', 'B', 'C', 'D'].includes(q.correctAnswer)) {
+            throw new BadRequestException(`Question ${qNum}: Correct answer must be A, B, C, or D.`);
+          }
+          break;
+        }
+
+        case 'MATCH_FOLLOWING': {
+          if (Array.isArray(q.columnA)) {
+            const hasEmptyColA = q.columnA.some((item: any) => !item.text || !item.text.trim());
+            if (hasEmptyColA) throw new BadRequestException(`Question ${qNum}: All Column A items must have non-empty text.`);
+          }
+          if (Array.isArray(q.columnB)) {
+            const hasEmptyColB = q.columnB.some((item: any) => !item.text || !item.text.trim());
+            if (hasEmptyColB) throw new BadRequestException(`Question ${qNum}: All Column B items must have non-empty text.`);
+          }
+          if (!q.optionA || !q.optionA.trim()) throw new BadRequestException(`Question ${qNum}: Option A is required.`);
+          if (!q.optionB || !q.optionB.trim()) throw new BadRequestException(`Question ${qNum}: Option B is required.`);
+          if (!q.optionC || !q.optionC.trim()) throw new BadRequestException(`Question ${qNum}: Option C is required.`);
+          if (!q.optionD || !q.optionD.trim()) throw new BadRequestException(`Question ${qNum}: Option D is required.`);
+          if (!q.correctAnswer || !['A', 'B', 'C', 'D'].includes(q.correctAnswer)) {
+            throw new BadRequestException(`Question ${qNum}: Correct answer must be A, B, C, or D.`);
+          }
+          break;
+        }
       }
     }
 

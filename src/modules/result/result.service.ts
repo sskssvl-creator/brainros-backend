@@ -94,6 +94,7 @@ export class ResultService {
           include: {
             questionType: true,
             options: { select: { id: true, isCorrect: true } },
+            answer: true,
           },
         },
         section: { select: { subjectId: true } },
@@ -749,6 +750,7 @@ export class ResultService {
               include: {
                 questionType: { select: { name: true, code: true } },
                 translations: true,
+                answer: true,
                 options: {
                   orderBy: { displayOrder: 'asc' },
                   include: {
@@ -839,6 +841,7 @@ export class ResultService {
           include: {
             questionType: { select: { name: true, code: true } },
             translations: true,
+            answer: true,
             options: {
               orderBy: { displayOrder: 'asc' },
               include: {
@@ -898,14 +901,22 @@ export class ResultService {
   // ═══════════════════════════════════════════════════════════════
 
   private evaluateAnswer(question: any, answer: any): boolean {
-    const code = question.questionType?.code;
+    const rawType = (question.type || question.questionType?.code || '').toUpperCase();
+    let normalized = 'SCQ';
+    if (rawType === 'NUM' || rawType === 'NUMERICAL') normalized = 'NUM';
+    else if (rawType === 'MCQ' || rawType === 'MULTIPLE_CORRECT') normalized = 'MCQ';
+    else if (rawType === 'TF' || rawType === 'TRUE_FALSE') normalized = 'TF';
+    else if (rawType === 'AR' || rawType === 'ASSERTION_REASON') normalized = 'AR';
+    else if (rawType === 'MTF' || rawType === 'MATCH_FOLLOWING') normalized = 'MTF';
+    else if (rawType === 'SCQ' || rawType === 'SINGLE_CORRECT' || rawType === 'CASE_BASED') normalized = 'SCQ';
 
-    switch (code) {
+    switch (normalized) {
       case 'SCQ':
       case 'TF':
-      case 'AR': {
+      case 'AR':
+      case 'MTF': {
         if (!answer.selectedOptionId) return false;
-        const correctOption = question.options.find((o: any) => o.isCorrect);
+        const correctOption = question.options?.find((o: any) => o.isCorrect);
         return correctOption
           ? answer.selectedOptionId === correctOption.id
           : false;
@@ -914,7 +925,7 @@ export class ResultService {
         const selected = answer.selectedOptions as string[] | null;
         if (!selected || selected.length === 0) return false;
         const correctIds = new Set<string>(
-          question.options
+          (question.options || [])
             .filter((o: any) => o.isCorrect)
             .map((o: any) => o.id),
         );
@@ -931,10 +942,13 @@ export class ResultService {
           answer.numericalAnswer === undefined
         )
           return false;
-        const correctValue = question.correctAnswer;
+        const correctValue = question.correctAnswer ?? question.answer?.numericalAnswer;
         if (correctValue === null || correctValue === undefined) return false;
         if (typeof correctValue === 'number') {
-          return Math.abs(answer.numericalAnswer - correctValue) < 0.001;
+          return Math.abs(Number(answer.numericalAnswer) - correctValue) < 0.001;
+        }
+        if (typeof correctValue === 'string') {
+          return Math.abs(Number(answer.numericalAnswer) - parseFloat(correctValue)) < 0.001;
         }
         if (
           typeof correctValue === 'object' &&
@@ -942,9 +956,15 @@ export class ResultService {
           correctValue.max !== undefined
         ) {
           return (
-            answer.numericalAnswer >= correctValue.min &&
-            answer.numericalAnswer <= correctValue.max
+            Number(answer.numericalAnswer) >= correctValue.min &&
+            Number(answer.numericalAnswer) <= correctValue.max
           );
+        }
+        if (
+          typeof correctValue === 'object' &&
+          correctValue.numericalAnswer !== undefined
+        ) {
+          return Math.abs(Number(answer.numericalAnswer) - Number(correctValue.numericalAnswer)) < 0.001;
         }
         return false;
       }

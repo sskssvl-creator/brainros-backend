@@ -301,8 +301,8 @@ export class ExamService {
           },
         },
         schedules: {
-          where: { status: { in: ['ACTIVE', 'SCHEDULED', 'ENDED'] } },
-          orderBy: { createdAt: 'desc' },
+          where: { status: { in: ['ACTIVE', 'SCHEDULED', 'RESCHEDULED', 'ENDED'] } },
+          orderBy: [{ updatedAt: 'desc' }, { startTime: 'desc' }],
           take: 1,
         },
         sections: {
@@ -378,23 +378,19 @@ export class ExamService {
         accessStatus = 'CANCELLED';
         canStart = false;
         message = 'This examination has been cancelled by administration.';
-      } else if (statusName === 'ENDED' || statusName === 'COMPLETED') {
-        accessStatus = 'ENDED';
+      } else if (statusName === 'DRAFT') {
+        accessStatus = 'CANCELLED';
         canStart = false;
-        message = 'The examination window for this test has closed.';
+        message = 'This examination is currently in draft preparation.';
       } else if (startTime && serverNow.getTime() < new Date(startTime).getTime()) {
         accessStatus = 'NOT_YET_STARTED';
         canStart = false;
         waitSeconds = Math.ceil((new Date(startTime).getTime() - serverNow.getTime()) / 1000);
-        message = `This exam will start at ${new Date(startTime).toLocaleString('en-IN', {
-          dateStyle: 'medium',
-          timeStyle: 'short',
-          timeZone: 'Asia/Kolkata',
-        })}.`;
-      } else if (endTime && serverNow.getTime() > new Date(endTime).getTime()) {
+        message = `Examination starts in ${Math.floor(waitSeconds / 3600)}h ${Math.floor((waitSeconds % 3600) / 60)}m.`;
+      } else if (endTime && serverNow.getTime() >= new Date(endTime).getTime()) {
         accessStatus = 'ENDED';
         canStart = false;
-        message = 'The live testing slot for this examination has concluded.';
+        message = 'Examination window has closed.';
       }
     }
 
@@ -428,7 +424,15 @@ export class ExamService {
               timezone: activeSchedule.timezone,
               status: activeSchedule.status,
             }
-          : null,
+          : startTime || endTime
+            ? {
+                id: '',
+                startTime,
+                endTime,
+                timezone: 'Asia/Kolkata',
+                status: exam.status?.name || 'SCHEDULED',
+              }
+            : null,
       },
       accessDetails: {
         accessStatus,
@@ -761,8 +765,8 @@ export class ExamService {
           },
         },
         schedules: {
-          where: { status: { in: ['ACTIVE', 'SCHEDULED'] } },
-          orderBy: { createdAt: 'desc' },
+          where: { status: { in: ['ACTIVE', 'SCHEDULED', 'RESCHEDULED'] } },
+          orderBy: [{ updatedAt: 'desc' }, { startTime: 'asc' }],
           take: 1,
         },
         _count: { select: { examQuestions: true, attempts: true } },

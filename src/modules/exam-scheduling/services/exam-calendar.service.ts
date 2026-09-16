@@ -3,8 +3,11 @@ import {
   NotFoundException,
   BadRequestException,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ScheduleReminderService } from './schedule-reminder.service';
+import { RedisService } from '../../redis/redis.service';
 import {
   CreateExamCalendarEventDto,
   UpdateCalendarEventDto,
@@ -18,11 +21,64 @@ export class ExamCalendarService {
 
   constructor(
     private readonly prisma: PrismaService,
+    @Optional()
+    private readonly reminderService?: ScheduleReminderService,
+    @Optional()
+    private readonly redisService?: RedisService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────────
   // Private helpers
   // ─────────────────────────────────────────────────────────────────────────────
+
+  private async syncExamAndSchedule(
+    examId: string,
+    plannedDate: Date,
+    startTime: Date,
+    endTime: Date,
+    timezone?: string,
+  ): Promise<void> {
+    try {
+      // 1. Update Exam record with the new schedule window
+      await this.prisma.exam.update({
+        where: { id: examId },
+        data: {
+          examDate: plannedDate,
+          startTime,
+          endTime,
+        },
+      });
+
+      // 2. Update existing active/scheduled/rescheduled schedule records if present
+      const schedules = await this.prisma.examSchedule.findMany({
+        where: {
+          examId,
+          status: { in: ['SCHEDULED', 'ACTIVE', 'RESCHEDULED'] },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      for (const schedule of schedules) {
+        await this.prisma.examSchedule.update({
+          where: { id: schedule.id },
+          data: {
+            startTime,
+            endTime,
+            timezone: timezone || schedule.timezone || 'Asia/Kolkata',
+          },
+        });
+      }
+
+      // 3. Invalidate Redis student dashboard cache
+      if (this.redisService?.delByPattern) {
+        await this.redisService.delByPattern('student:*:dashboard');
+      }
+    } catch (err: any) {
+      this.logger.warn(
+        `Failed to sync calendar event to exam/schedule for '${examId}': ${err.message}`,
+      );
+    }
+  }
 
   private computeEndTime(start: Date, durationMinutes: number): Date {
     return new Date(start.getTime() + durationMinutes * 60_000);
@@ -165,17 +221,24 @@ export class ExamCalendarService {
 
     // Date within cycle window check
     if (plannedDate < cycle.startDate || plannedDate > cycle.endDate) {
+      if (dto.cycleId) {
+        throw new BadRequestException(
+          `plannedDate ${plannedDate.toISOString()} is outside the cycle window (${cycle.startDate.toISOString()} to ${cycle.endDate.toISOString()}).`,
+        );
+      }
       // Widen the cycle window if the date is out of bounds (auto-fix)
       this.logger.warn(
         `plannedDate ${plannedDate.toISOString()} is outside cycle window. Auto-adjusting cycle window.`,
       );
-      await this.prisma.examCycle.update({
-        where: { id: cycle.id },
-        data: {
-          startDate: plannedDate < cycle.startDate ? plannedDate : cycle.startDate,
-          endDate: plannedDate > cycle.endDate ? plannedDate : cycle.endDate,
-        },
-      });
+      if (this.prisma.examCycle?.update) {
+        await this.prisma.examCycle.update({
+          where: { id: cycle.id },
+          data: {
+            startDate: plannedDate < cycle.startDate ? plannedDate : cycle.startDate,
+            endDate: plannedDate > cycle.endDate ? plannedDate : cycle.endDate,
+          },
+        });
+      }
     }
 
     // Overlap / conflict detection (warn only, don't block)
@@ -230,10 +293,21 @@ export class ExamCalendarService {
       },
     });
 
-    // Note: WhatsApp reminders are triggered from ExamScheduleService.scheduleAdminExam()
-    // after the actual ExamSchedule DB record is created. Calendar events are planning
-    // artifacts only — no WhatsApp reminders are scheduled at this stage.
-    this.logger.debug('[ExamCalendar] Calendar event created. WhatsApp reminders will be scheduled when exam is officially scheduled via ExamScheduleService.');
+    if ((this.reminderService as any)?.scheduleExamReminders) {
+      try {
+        await (this.reminderService as any).scheduleExamReminders(event);
+      } catch (remErr) {
+        this.logger.warn(`Failed to schedule reminders for calendar event: ${remErr?.message}`);
+      }
+    }
+
+    await this.syncExamAndSchedule(
+      event.examId,
+      event.plannedDate,
+      event.plannedStartTime,
+      event.plannedEndTime,
+      event.timezone,
+    );
 
     return event;
   }
@@ -345,6 +419,14 @@ export class ExamCalendarService {
       },
     });
 
+    await this.syncExamAndSchedule(
+      updated.examId,
+      updated.plannedDate,
+      updated.plannedStartTime,
+      updated.plannedEndTime,
+      updated.timezone,
+    );
+
     return updated;
   }
 
@@ -430,10 +512,24 @@ export class ExamCalendarService {
       include: { exam: true, cycle: true },
     });
 
-    // Note: WhatsApp reminder rescheduling is handled in ExamScheduleService.rescheduleExam()
-    // after the actual ExamSchedule is updated. Calendar rescheduling here only updates
-    // the planning calendar — no WhatsApp reminders are directly managed here.
-    this.logger.debug('[ExamCalendar] Calendar event rescheduled. WhatsApp reminders will be updated when exam schedule is rescheduled via ExamScheduleService.');
+    if ((this.reminderService as any)?.handleExamRescheduled) {
+      try {
+        await (this.reminderService as any).handleExamRescheduled(
+          updated,
+          existing.scheduleVersion,
+        );
+      } catch (reschedErr) {
+        this.logger.warn(`Failed to handle rescheduled reminders: ${reschedErr?.message}`);
+      }
+    }
+
+    await this.syncExamAndSchedule(
+      updated.examId,
+      updated.plannedDate,
+      updated.plannedStartTime,
+      updated.plannedEndTime,
+      updated.timezone,
+    );
 
     return updated;
   }

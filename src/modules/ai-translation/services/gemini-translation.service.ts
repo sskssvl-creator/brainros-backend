@@ -297,10 +297,8 @@ ${JSON.stringify(questions, null, 2)}
       if (
         typeof item.questionNumber !== 'number' ||
         !item.question ||
-        !item.optionA ||
-        !item.optionB ||
-        !item.optionC ||
-        !item.optionD
+        item.optionA === undefined ||
+        item.optionB === undefined
       ) {
         continue;
       }

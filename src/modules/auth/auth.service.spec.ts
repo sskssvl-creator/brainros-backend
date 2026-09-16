@@ -28,6 +28,7 @@ describe('AuthService (Passwordless & OTP Registration)', () => {
   const mockRedisStorage = new Map<string, string>();
 
   beforeEach(async () => {
+    process.env.PUBLIC_REGISTRATION_FEE_INR = '300';
     mockRedisStorage.clear();
 
     redisServiceMock = {

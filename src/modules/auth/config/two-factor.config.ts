@@ -87,8 +87,8 @@ export class TwoFactorConfig {
 
     const rawProvider = String(
       this.configService.get<string>('OTP_PROVIDER') ||
-        process.env.OTP_PROVIDER ||
-        (this.twilioAccountSid && this.twilioVerifyServiceSid ? 'TWILIO' : 'TWILIO'),
+      process.env.OTP_PROVIDER ||
+      (this.twilioAccountSid && this.twilioVerifyServiceSid ? 'TWILIO' : 'TWILIO'),
     )
       .trim()
       .toUpperCase();
@@ -128,34 +128,43 @@ export class TwoFactorConfig {
       process.env.DEV_OTP_CODE ??
       '12345';
 
+    const rawTtl =
+      this.configService.get('OTP_TTL_SECONDS') ?? process.env.OTP_TTL_SECONDS;
     this.otpTtl =
-      Number(
-        this.configService.get('OTP_TTL_SECONDS') ||
-          process.env.OTP_TTL_SECONDS,
-      ) || 300;
+      rawTtl !== undefined && rawTtl !== null && rawTtl !== ''
+        ? Number(rawTtl)
+        : 300;
 
+    const rawCooldown =
+      this.configService.get('OTP_RESEND_COOLDOWN_SECONDS') ??
+      process.env.OTP_RESEND_COOLDOWN_SECONDS;
     this.resendCooldown =
-      Number(
-        this.configService.get('OTP_RESEND_COOLDOWN_SECONDS') ||
-          process.env.OTP_RESEND_COOLDOWN_SECONDS,
-      ) || 60;
+      rawCooldown !== undefined && rawCooldown !== null && rawCooldown !== ''
+        ? Number(rawCooldown)
+        : 60;
 
+    const rawAttempts =
+      this.configService.get('OTP_MAX_VERIFY_ATTEMPTS') ??
+      process.env.OTP_MAX_VERIFY_ATTEMPTS;
     this.maxAttempts =
-      Number(
-        this.configService.get('OTP_MAX_VERIFY_ATTEMPTS') ||
-          process.env.OTP_MAX_VERIFY_ATTEMPTS,
-      ) || 5;
+      rawAttempts !== undefined && rawAttempts !== null && rawAttempts !== ''
+        ? Number(rawAttempts)
+        : 5;
 
+    const rawLength =
+      this.configService.get('OTP_LENGTH') ?? process.env.OTP_LENGTH;
     this.otpLength =
-      Number(
-        this.configService.get('OTP_LENGTH') || process.env.OTP_LENGTH,
-      ) || 6;
+      rawLength !== undefined && rawLength !== null && rawLength !== ''
+        ? Number(rawLength)
+        : 6;
 
+    const rawMaxReqs =
+      this.configService.get('OTP_MAX_REQUESTS_PER_HOUR') ??
+      process.env.OTP_MAX_REQUESTS_PER_HOUR;
     this.maxRequestsPerHour =
-      Number(
-        this.configService.get('OTP_MAX_REQUESTS_PER_HOUR') ||
-          process.env.OTP_MAX_REQUESTS_PER_HOUR,
-      ) || 5;
+      rawMaxReqs !== undefined && rawMaxReqs !== null && rawMaxReqs !== ''
+        ? Number(rawMaxReqs)
+        : 5;
 
     this.logger.log(
       `TwoFactorConfig initialized: [ENABLE_REAL_OTP = ${this.enable2FA ? 'TRUE (Active Gateway: ' + this.otpProvider + ')' : 'FALSE (Development Bypass: ' + this.devBypassOtp + ')'}]`,

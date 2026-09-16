@@ -15,12 +15,30 @@ import { LanguageTranslationProgress } from '../dto/ai-translation-upload.dto';
 
 export interface ManualQuestionItem {
   questionText: string;
-  optionA: string;
-  optionB: string;
-  optionC: string;
-  optionD: string;
-  correctAnswer: string;
+  difficulty?: 'EASY' | 'MEDIUM' | 'HARD' | 'VERY_HARD';
+  type?:
+    | 'SINGLE_CORRECT'
+    | 'MULTIPLE_CORRECT'
+    | 'NUMERICAL'
+    | 'ASSERTION_REASON'
+    | 'MATCH_FOLLOWING';
+  optionA?: string;
+  optionB?: string;
+  optionC?: string;
+  optionD?: string;
+  correctAnswer?: string;
+  correctAnswers?: string[];
+  numericalAnswer?: number | string;
+  assertion?: string;
+  reason?: string;
+  columnA?: Array<{ key: string; text: string }>;
+  columnB?: Array<{ key: string; text: string }>;
+  matchPairs?: Array<{ left: string; right: string }>;
   explanation?: string;
+  subjectId?: string;
+  chapterId?: string;
+  marks?: number;
+  negativeMarks?: number;
 }
 
 export interface AiTranslationParentJobData {
@@ -850,16 +868,21 @@ export class AiTranslationParentProcessor extends WorkerHost {
       const qData = questions[idx];
       const seqNum = idx + 1;
 
+      const qType = qData.type || 'SINGLE_CORRECT';
+      const qDifficulty = qData.difficulty || 'MEDIUM';
+
       // Create master Question
       const masterQ = await this.prisma.question.create({
         data: {
           subjectId: defaultSubject.id,
           chapterId: defaultChapter.id,
           ...(defaultLangId ? { defaultLanguageId: defaultLangId } : {}),
-          type: 'SINGLE_CORRECT',
-          difficultyLevel: 'MEDIUM',
+          type: qType as any,
+          difficultyLevel: qDifficulty as any,
           marks: marksPerQ,
           negativeMarks: negMarks,
+          assertion: qType === 'ASSERTION_REASON' ? qData.assertion || null : null,
+          reason: qType === 'ASSERTION_REASON' ? qData.reason || null : null,
           createdById: userId,
           isActive: true,
         } as any,
@@ -868,32 +891,67 @@ export class AiTranslationParentProcessor extends WorkerHost {
       // English translation for the question text
       if (defaultLangId) {
         await this.prisma.questionTranslation.create({
-          data: { questionId: masterQ.id, languageId: defaultLangId, questionText: qData.questionText },
+          data: {
+            questionId: masterQ.id,
+            languageId: defaultLangId,
+            questionText: qData.questionText,
+            assertionText: qType === 'ASSERTION_REASON' ? qData.assertion || null : null,
+            reasonText: qType === 'ASSERTION_REASON' ? qData.reason || null : null,
+            explanation: qData.explanation || null,
+          },
         });
       }
 
-      // Create options A, B, C, D — isCorrect is set from correctAnswer field
-      const optDefs = [
-        { key: 'A', text: qData.optionA },
-        { key: 'B', text: qData.optionB },
-        { key: 'C', text: qData.optionC },
-        { key: 'D', text: qData.optionD },
-      ];
+      // Create options if applicable (non-numerical)
       const createdOpts: any[] = [];
-      for (let oIdx = 0; oIdx < optDefs.length; oIdx++) {
-        const optDef = optDefs[oIdx];
-        const opt = await this.prisma.questionOption.create({
-          data: {
-            questionId: masterQ.id,
-            optionKey: optDef.key,
-            optionLabel: optDef.key,
-            optionText: optDef.text,
-            isCorrect: optDef.key === qData.correctAnswer, // ✅ Correct answer persisted
-            displayOrder: oIdx + 1,
-          },
-        });
-        createdOpts.push(opt);
+      if (qType !== 'NUMERICAL') {
+        const optDefs = [
+          { key: 'A', text: qData.optionA || '' },
+          { key: 'B', text: qData.optionB || '' },
+          { key: 'C', text: qData.optionC || '' },
+          { key: 'D', text: qData.optionD || '' },
+        ];
+
+        const multiCorrect = Array.isArray(qData.correctAnswers)
+          ? qData.correctAnswers
+          : typeof qData.correctAnswer === 'string'
+          ? qData.correctAnswer.split(/[\s,]+/).filter(Boolean)
+          : [];
+
+        for (let oIdx = 0; oIdx < optDefs.length; oIdx++) {
+          const optDef = optDefs[oIdx];
+          const isCorrect =
+            qType === 'MULTIPLE_CORRECT'
+              ? multiCorrect.includes(optDef.key)
+              : optDef.key === qData.correctAnswer;
+
+          const opt = await this.prisma.questionOption.create({
+            data: {
+              questionId: masterQ.id,
+              optionKey: optDef.key,
+              optionLabel: optDef.key,
+              optionText: optDef.text,
+              isCorrect,
+              displayOrder: oIdx + 1,
+            },
+          });
+          createdOpts.push(opt);
+        }
       }
+
+      // Create QuestionAnswer record
+      const correctOptionIds = createdOpts.filter((o) => o.isCorrect).map((o) => o.id);
+      await this.prisma.questionAnswer.create({
+        data: {
+          questionId: masterQ.id,
+          answerType: qType as any,
+          correctOptionIds: correctOptionIds.length > 0 ? correctOptionIds : undefined,
+          numericalAnswer:
+            qType === 'NUMERICAL' && qData.numericalAnswer !== undefined && qData.numericalAnswer !== null
+              ? parseFloat(String(qData.numericalAnswer))
+              : null,
+        } as any,
+      });
 
       // Link to exam
       await this.prisma.examQuestion.create({
@@ -907,6 +965,26 @@ export class AiTranslationParentProcessor extends WorkerHost {
         } as any,
       });
 
+      // Prepare snapshot correctAnswer object
+      let snapshotCorrectAnswer: any = null;
+      if (qType === 'NUMERICAL') {
+        snapshotCorrectAnswer = {
+          numericalAnswer:
+            qData.numericalAnswer !== undefined && qData.numericalAnswer !== null
+              ? parseFloat(String(qData.numericalAnswer))
+              : null,
+        };
+      } else if (qType === 'MULTIPLE_CORRECT') {
+        const multiCorrect = Array.isArray(qData.correctAnswers)
+          ? qData.correctAnswers
+          : typeof qData.correctAnswer === 'string'
+          ? qData.correctAnswer.split(/[\s,]+/).filter(Boolean)
+          : [];
+        snapshotCorrectAnswer = { keys: multiCorrect };
+      } else {
+        snapshotCorrectAnswer = { key: qData.correctAnswer };
+      }
+
       // ExamVersionQuestion snapshot
       const evq = await this.prisma.examVersionQuestion.create({
         data: {
@@ -915,13 +993,15 @@ export class AiTranslationParentProcessor extends WorkerHost {
           sequenceNumber: seqNum,
           sectionName: (examSection as any).name || 'Section A',
           subjectName: defaultSubject.name,
-          type: 'SINGLE_CORRECT',
-          difficultyLevel: 'MEDIUM',
+          type: qType as any,
+          difficultyLevel: qDifficulty as any,
           marks: marksPerQ,
           negativeMarks: negMarks,
+          assertion: qType === 'ASSERTION_REASON' ? qData.assertion || null : null,
+          reason: qType === 'ASSERTION_REASON' ? qData.reason || null : null,
           questionText: qData.questionText,
           explanation: qData.explanation || null,
-          correctAnswer: { key: qData.correctAnswer }, // ✅ Correct answer in snapshot
+          correctAnswer: snapshotCorrectAnswer,
         } as any,
       });
 
@@ -933,6 +1013,7 @@ export class AiTranslationParentProcessor extends WorkerHost {
             languageId: defaultLangId,
             languageCode: 'en',
             questionText: qData.questionText,
+            explanation: qData.explanation || null,
           },
         });
       }
@@ -948,7 +1029,7 @@ export class AiTranslationParentProcessor extends WorkerHost {
             optionKey: opt.optionKey,
             optionLabel: opt.optionLabel,
             optionText: opt.optionText || '',
-            isCorrect: opt.isCorrect, // ✅ Correct answer propagated to snapshot
+            isCorrect: opt.isCorrect,
           },
         });
       }

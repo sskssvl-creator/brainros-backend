@@ -5,7 +5,11 @@ import { RedisService } from '../../redis/redis.service';
 import { ResultReadinessService } from './result-readiness.service';
 import { JobProgressService } from '../../job-progress/services/job-progress.service';
 import { getQueueToken } from '@nestjs/bullmq';
-import { EVALUATION_QUEUE_NAME, ResultStatusEnum } from '../interfaces/result-lifecycle.interface';
+import {
+  EVALUATION_QUEUE_NAME,
+  EXAM_WINDOW_END_QUEUE_NAME,
+  ResultStatusEnum,
+} from '../interfaces/result-lifecycle.interface';
 
 describe('ResultProcessingMonitorService (Real-Time Job Monitoring & Observability)', () => {
   let service: ResultProcessingMonitorService;
@@ -45,6 +49,11 @@ describe('ResultProcessingMonitorService (Real-Time Job Monitoring & Observabili
     getJob: jest.fn().mockResolvedValue(null),
   };
 
+  const mockWindowEndQueue = {
+    add: jest.fn().mockResolvedValue({ id: 'window_end_1' }),
+    getJob: jest.fn().mockResolvedValue(null),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -54,6 +63,7 @@ describe('ResultProcessingMonitorService (Real-Time Job Monitoring & Observabili
         { provide: ResultReadinessService, useValue: mockReadinessService },
         { provide: JobProgressService, useValue: mockJobProgressService },
         { provide: getQueueToken(EVALUATION_QUEUE_NAME), useValue: mockEvaluationQueue },
+        { provide: getQueueToken(EXAM_WINDOW_END_QUEUE_NAME), useValue: mockWindowEndQueue },
       ],
     }).compile();
 

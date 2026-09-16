@@ -257,6 +257,12 @@ export class ExamManagerFilterDto {
 
   @IsOptional()
   missingQuestionPaperOnly?: boolean | string;
+
+  @IsOptional()
+  notConductedOnly?: boolean | string;
+
+  @IsOptional()
+  excludeCompleted?: boolean | string;
 }
 
 export class ManualQuestionItemDto {
@@ -265,24 +271,70 @@ export class ManualQuestionItemDto {
   questionText: string;
 
   @IsNotEmpty()
-  @IsString()
-  optionA: string;
+  @IsIn(['EASY', 'MEDIUM', 'HARD', 'VERY_HARD'])
+  difficulty: 'EASY' | 'MEDIUM' | 'HARD' | 'VERY_HARD';
 
   @IsNotEmpty()
-  @IsString()
-  optionB: string;
+  @IsIn([
+    'SINGLE_CORRECT',
+    'MULTIPLE_CORRECT',
+    'NUMERICAL',
+    'ASSERTION_REASON',
+    'MATCH_FOLLOWING',
+  ])
+  type:
+    | 'SINGLE_CORRECT'
+    | 'MULTIPLE_CORRECT'
+    | 'NUMERICAL'
+    | 'ASSERTION_REASON'
+    | 'MATCH_FOLLOWING';
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  optionC: string;
+  optionA?: string;
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  optionD: string;
+  optionB?: string;
 
-  @IsNotEmpty()
-  @IsIn(['A', 'B', 'C', 'D'])
-  correctAnswer: 'A' | 'B' | 'C' | 'D';
+  @IsOptional()
+  @IsString()
+  optionC?: string;
+
+  @IsOptional()
+  @IsString()
+  optionD?: string;
+
+  @IsOptional()
+  @IsString()
+  correctAnswer?: string;
+
+  @IsOptional()
+  @IsArray()
+  correctAnswers?: string[];
+
+  @IsOptional()
+  numericalAnswer?: number | string;
+
+  @IsOptional()
+  @IsString()
+  assertion?: string;
+
+  @IsOptional()
+  @IsString()
+  reason?: string;
+
+  @IsOptional()
+  @IsArray()
+  columnA?: Array<{ key: string; text: string }>;
+
+  @IsOptional()
+  @IsArray()
+  columnB?: Array<{ key: string; text: string }>;
+
+  @IsOptional()
+  @IsArray()
+  matchPairs?: Array<{ left: string; right: string }>;
 
   @IsOptional()
   @IsString()

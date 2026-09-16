@@ -29,6 +29,7 @@ import { RegisterSendOtpDto, RegisterVerifyOtpDto } from './dto/register-otp.dto
 import { LoginSendOtpDto, LoginVerifyOtpDto } from './dto/login-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
 import { RedisService } from '../redis/redis.service';
+import { CANONICAL_TARGET_EXAMS } from '../../common/constants/target-exam.constant';
 import * as crypto from 'crypto';
 import axios from 'axios';
 
@@ -2253,15 +2254,7 @@ export class AuthService {
   }
 
   async getRegisterOptions() {
-    const targetOrder = [
-      'JEE',
-      'CET',
-      'NEET',
-      'NEET and JEE',
-      'NEET and State CET',
-      'JEE and State CET',
-      'JEE, NEET and State CET',
-    ];
+    const targetOrder = CANONICAL_TARGET_EXAMS;
 
     const [classes, languages, rawTargets, states] = await Promise.all([
       this.prisma.studentClass.findMany({

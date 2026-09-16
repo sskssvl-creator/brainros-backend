@@ -1,5 +1,6 @@
-import { Module, forwardRef } from '@nestjs/common';
-import { BullModule } from '@nestjs/bullmq';
+import { Module, forwardRef, OnModuleInit } from '@nestjs/common';
+import { BullModule, InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import { ResultController } from './result.controller';
 import { ExamPublicationController } from './controllers/exam-publication.controller';
 import { ResultService } from './result.service';
@@ -12,6 +13,8 @@ import { RedisModule } from '../redis/redis.module';
 import { RankEngineModule } from '../rank-engine/rank-engine.module';
 import { ExamSchedulingModule } from '../exam-scheduling/exam-scheduling.module';
 import { NotificationModule } from '../notification/notification.module';
+import { TimeAnalysisModule } from '../time-analysis/time-analysis.module';
+import { AttemptStrategyModule } from '../attempt-strategy/attempt-strategy.module';
 import {
   EVALUATION_QUEUE_NAME,
   ANALYTICS_QUEUE_NAME,
@@ -33,6 +36,8 @@ import { ResultProcessingMonitorService } from './services/result-processing-mon
     PrismaModule,
     RedisModule,
     RankEngineModule,
+    TimeAnalysisModule,
+    AttemptStrategyModule,
     forwardRef(() => ExamSchedulingModule),
     forwardRef(() => NotificationModule),
     BullModule.registerQueue(
@@ -69,4 +74,23 @@ import { ResultProcessingMonitorService } from './services/result-processing-mon
     BullModule,
   ],
 })
-export class ResultModule {}
+export class ResultModule implements OnModuleInit {
+  constructor(
+    @InjectQueue(RECONCILIATION_QUEUE_NAME)
+    private readonly reconciliationQueue: Queue,
+  ) {}
+
+  async onModuleInit() {
+    try {
+      await this.reconciliationQueue.add(
+        'RECONCILE',
+        {},
+        {
+          jobId: 'periodic_result_reconciliation',
+          repeat: { every: 30000 },
+          removeOnComplete: true,
+        } as any,
+      );
+    } catch {}
+  }
+}

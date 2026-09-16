@@ -13,6 +13,11 @@ import * as path from 'path';
 
 import { Optional } from '@nestjs/common';
 import { JobProgressService } from '../../job-progress/services/job-progress.service';
+import {
+  CANONICAL_TARGET_EXAMS,
+  resolveEligibleExamTypes,
+  normalizeTargetExamInput,
+} from '../../../common/constants/target-exam.constant';
 
 const ALLOWED_EXTENSIONS = ['.csv', '.xlsx', '.xls'];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
@@ -73,7 +78,7 @@ export class StudentBulkRegistrationService {
       { header: 'State *', key: 'state', width: 20 },
       { header: 'City / District *', key: 'city', width: 22 },
       { header: 'Class / Grade * (e.g. 11th, 12th, Dropper)', key: 'class', width: 25 },
-      { header: 'Exam Target * (e.g. NEET, JEE, CET, or multi-target: NEET, CET)', key: 'examTarget', width: 34 },
+      { header: 'Exam Target * (Options: JEE, CET, NEET, NEET + JEE, NEET + State CET, JEE + State CET, JEE + NEET + State CET)', key: 'examTarget', width: 40 },
       { header: 'Preferred Language * (e.g. ENGLISH, HINDI, GUJARATI)', key: 'preferredLanguage', width: 26 },
     ];
 
@@ -97,7 +102,7 @@ export class StudentBulkRegistrationService {
       cell.alignment = { vertical: 'middle', horizontal: 'center' };
     });
 
-    // Sample data rows (with multi-target examples)
+    // Sample data rows (with exact canonical target examples)
     const sampleRows = [
       {
         name: 'Rahul Sharma',
@@ -106,7 +111,7 @@ export class StudentBulkRegistrationService {
         state: 'Gujarat',
         city: 'Ahmedabad',
         class: '12th',
-        examTarget: 'NEET, CET',
+        examTarget: 'NEET + State CET',
         preferredLanguage: 'ENGLISH',
       },
       {
@@ -116,7 +121,7 @@ export class StudentBulkRegistrationService {
         state: 'Gujarat',
         city: 'Surat',
         class: '11th',
-        examTarget: 'JEE, CET',
+        examTarget: 'JEE + State CET',
         preferredLanguage: 'GUJARATI',
       },
       {
@@ -126,8 +131,18 @@ export class StudentBulkRegistrationService {
         state: 'Maharashtra',
         city: 'Mumbai',
         class: '12th',
-        examTarget: 'NEET',
+        examTarget: 'NEET + JEE',
         preferredLanguage: 'HINDI',
+      },
+      {
+        name: 'Raj Shah',
+        mobile: '9876543213',
+        email: 'raj.shah@example.com',
+        state: 'Gujarat',
+        city: 'Vadodara',
+        class: '12th',
+        examTarget: 'JEE',
+        preferredLanguage: 'ENGLISH',
       },
     ];
 
@@ -551,7 +566,7 @@ export class StudentBulkRegistrationService {
         }
       }
 
-      // Exam Target (supports single or multi-target: JEE Main, MHT-CET, NEET, etc.)
+      // Exam Target (Strictly accepts only the 7 Target combinations)
       let resolvedExamTargetId: string | null = null;
       const resolvedExamTargetIds: string[] = [];
       const validTargetNames: string[] = [];
@@ -560,42 +575,21 @@ export class StudentBulkRegistrationService {
         rowErrors.push({
           field: 'examTarget',
           errorCode: 'MISSING_EXAM_TARGET',
-          message: 'Exam Target is required (e.g. NEET, JEE, CET, or multi-target: NEET, CET).',
+          message:
+            'Exam Target is required (Valid options: JEE, CET, NEET, NEET + JEE, NEET + State CET, JEE + State CET, JEE + NEET + State CET).',
         });
       } else {
-        const parts = examTargetName
-          .split(/[,/+]|\band\b/i)
-          .map((s) => s.trim())
-          .filter(Boolean);
-
-        if (parts.length === 0) {
+        const resolved = this.resolveCanonicalExamTarget(examTargetName, examTargets);
+        if (!resolved) {
           rowErrors.push({
             field: 'examTarget',
-            errorCode: 'MISSING_EXAM_TARGET',
-            message: 'Exam Target is required.',
+            errorCode: 'INVALID_EXAM_TARGET',
+            message: `Exam target '${examTargetName}' is invalid. Valid options: JEE, CET, NEET, NEET + JEE, NEET + State CET, JEE + State CET, JEE + NEET + State CET.`,
           });
         } else {
-          let hasTargetError = false;
-          for (const part of parts) {
-            const examRecord = this.resolveSingleExamTarget(part, examTargetMap, examTargets);
-            if (!examRecord) {
-              hasTargetError = true;
-              rowErrors.push({
-                field: 'examTarget',
-                errorCode: 'UNKNOWN_EXAM_TARGET',
-                message: `Exam target '${part}' is not recognized. Available targets: ${Array.from(new Set(examTargets.map((et) => et.name))).join(', ')}.`,
-              });
-            } else {
-              if (!resolvedExamTargetIds.includes(examRecord.id)) {
-                resolvedExamTargetIds.push(examRecord.id);
-                validTargetNames.push(examRecord.name);
-              }
-            }
-          }
-
-          if (!hasTargetError && resolvedExamTargetIds.length > 0) {
-            resolvedExamTargetId = resolvedExamTargetIds[0];
-          }
+          resolvedExamTargetId = resolved.targetRecord.id;
+          resolvedExamTargetIds.push(...resolved.resolvedTargetIds);
+          validTargetNames.push(resolved.canonicalName);
         }
       }
 
@@ -1513,23 +1507,26 @@ export class StudentBulkRegistrationService {
       }
     }
 
-    // Exam Target validation (multi-target)
+    // Exam Target validation (Strict 7 canonical options)
     if (!examTargetName) {
-      rowErrors.push({ field: 'examTarget', errorCode: 'MISSING_EXAM_TARGET', message: 'Exam Target is required.' });
+      rowErrors.push({
+        field: 'examTarget',
+        errorCode: 'MISSING_EXAM_TARGET',
+        message: 'Exam Target is required (Valid: JEE, CET, NEET, NEET + JEE, NEET + State CET, JEE + State CET, JEE + NEET + State CET).',
+      });
     } else {
-      const parts = examTargetName.split(/[,/+]|\band\b/i).map((s) => s.trim()).filter(Boolean);
-      for (const part of parts) {
-        const etRecord = this.resolveSingleExamTarget(part, examTargetMap, examTargets);
-        if (!etRecord) {
-          rowErrors.push({ field: 'examTarget', errorCode: 'UNKNOWN_EXAM_TARGET', message: `Exam target '${part}' not recognized.` });
-        } else {
-          if (!resolvedExamTargetIds.includes(etRecord.id)) {
-            resolvedExamTargetIds.push(etRecord.id);
-            validTargetNames.push(etRecord.name);
-          }
-        }
+      const resolved = this.resolveCanonicalExamTarget(examTargetName, examTargets);
+      if (!resolved) {
+        rowErrors.push({
+          field: 'examTarget',
+          errorCode: 'INVALID_EXAM_TARGET',
+          message: `Exam target '${examTargetName}' is invalid. Valid options: JEE, CET, NEET, NEET + JEE, NEET + State CET, JEE + State CET, JEE + NEET + State CET.`,
+        });
+      } else {
+        resolvedExamTargetId = resolved.targetRecord.id;
+        resolvedExamTargetIds.push(...resolved.resolvedTargetIds);
+        validTargetNames.push(resolved.canonicalName);
       }
-      if (resolvedExamTargetIds.length > 0) resolvedExamTargetId = resolvedExamTargetIds[0];
     }
 
     // Institution resolution fixed to upload context
@@ -1710,6 +1707,38 @@ export class StudentBulkRegistrationService {
     }
 
     return null;
+  }
+
+  /**
+   * Helper: Resolve canonical Exam Target strictly to one of the 7 supported combinations
+   */
+  private resolveCanonicalExamTarget(
+    targetInput: string,
+    examTargets: any[],
+  ): { targetRecord: any; canonicalName: string; resolvedTargetIds: string[] } | null {
+    if (!targetInput || !targetInput.trim()) return null;
+    const normalized = normalizeTargetExamInput(targetInput);
+    if (!normalized) return null;
+
+    const targetRecord = examTargets.find(
+      (et) => et.name.toLowerCase().trim() === normalized.toLowerCase(),
+    );
+    if (!targetRecord) return null;
+
+    // Resolve eligible actual exam types (e.g. ['NEET', 'JEE'])
+    const eligibleTypes = resolveEligibleExamTypes(normalized);
+    const eligibleRecords = examTargets.filter((et) =>
+      eligibleTypes.some((t) => t.toLowerCase() === et.name.toLowerCase().trim()),
+    );
+    const resolvedTargetIds = Array.from(
+      new Set([targetRecord.id, ...eligibleRecords.map((r) => r.id)]),
+    );
+
+    return {
+      targetRecord,
+      canonicalName: normalized,
+      resolvedTargetIds,
+    };
   }
 
   /**

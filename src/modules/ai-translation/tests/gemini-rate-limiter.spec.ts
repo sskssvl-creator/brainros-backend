@@ -1,6 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { GeminiRateLimiterService } from '../services/gemini-rate-limiter.service';
-import { RedisService } from '../../../common/redis/redis.service';
+import { RedisService } from '../../redis/redis.service';
 
 describe('GeminiRateLimiterService', () => {
   let rateLimiter: GeminiRateLimiterService;
@@ -25,7 +25,7 @@ describe('GeminiRateLimiterService', () => {
     mockRedisService = {
       isRedisAvailable: jest.fn().mockReturnValue(false),
       getClient: jest.fn().mockReturnValue(null),
-    };
+    } as any;
 
     rateLimiter = new GeminiRateLimiterService(
       mockConfigService as ConfigService,

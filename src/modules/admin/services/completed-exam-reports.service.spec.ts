@@ -3,6 +3,8 @@ import { CompletedExamReportsService } from './completed-exam-reports.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditLogService } from '../audit/services/audit-log.service';
 import { ResultService } from '../../result/result.service';
+import { JobProgressService } from '../../job-progress/services/job-progress.service';
+import { ModuleRef } from '@nestjs/core';
 import { getQueueToken } from '@nestjs/bullmq';
 
 describe('CompletedExamReportsService', () => {
@@ -11,6 +13,7 @@ describe('CompletedExamReportsService', () => {
   let emailQueue: any;
   let auditLogService: any;
   let resultService: any;
+  let jobProgressService: any;
 
   beforeEach(async () => {
     prisma = {
@@ -54,13 +57,22 @@ describe('CompletedExamReportsService', () => {
       getAnswerReview: jest.fn(),
     };
 
+    jobProgressService = {
+      initJob: jest.fn(),
+      updateProgress: jest.fn(),
+      completeJob: jest.fn(),
+      failJob: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CompletedExamReportsService,
         { provide: PrismaService, useValue: prisma },
         { provide: AuditLogService, useValue: auditLogService },
         { provide: ResultService, useValue: resultService },
+        { provide: JobProgressService, useValue: jobProgressService },
         { provide: getQueueToken('exam-report-email'), useValue: emailQueue },
+        { provide: ModuleRef, useValue: { get: jest.fn() } },
       ],
     }).compile();
 

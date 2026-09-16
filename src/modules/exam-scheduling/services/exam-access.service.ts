@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ExamLifecycleService } from './exam-lifecycle.service';
+import { resolveEligibleExamTypes } from '../../../common/constants/target-exam.constant';
 
 export interface ExamAccessValidationResult {
   isAllowed: boolean;
@@ -41,6 +42,7 @@ export class ExamAccessService {
       where: { id: examId },
       include: {
         status: true,
+        examTarget: true,
         schedules: {
           where: { status: { in: ['ACTIVE', 'SCHEDULED'] } },
           orderBy: { createdAt: 'desc' },
@@ -145,18 +147,48 @@ export class ExamAccessService {
       }
 
       // 3. Student Eligibility Check
-      if (studentId && exam.examTargetId) {
-        const student = await this.prisma.student.findUnique({
-          where: { id: studentId },
+      if (studentId && exam.examTarget && exam.examTarget.name !== 'General') {
+        const student = await this.prisma.student.findFirst({
+          where: { OR: [{ id: studentId }, { userId: studentId }] },
+          include: {
+            examTarget: true,
+            studentExamTargets: { include: { examTarget: true } },
+          },
         });
 
-        if (
-          student &&
-          student.examTargetId &&
-          student.examTargetId !== exam.examTargetId
-        ) {
-          // If different, allow if open practice, otherwise strict check if explicit mock test
-          // Here we do not block open practice mock tests
+        if (student) {
+          const rawTargetNames: string[] = [];
+          if (student.examTarget?.name) rawTargetNames.push(student.examTarget.name);
+          if (Array.isArray(student.studentExamTargets)) {
+            student.studentExamTargets.forEach((st: any) => {
+              if (st.examTarget?.name) rawTargetNames.push(st.examTarget.name);
+            });
+          }
+
+          const eligibleTypes = new Set<string>();
+          for (const name of rawTargetNames) {
+            resolveEligibleExamTypes(name).forEach((t) =>
+              eligibleTypes.add(t.toLowerCase()),
+            );
+          }
+
+          const directTargetIds = new Set<string>([
+            ...(student.examTargetId ? [student.examTargetId] : []),
+            ...(student.studentExamTargets?.map((st: any) => st.examTargetId) || []),
+          ]);
+
+          const examTargetNameLower = exam.examTarget.name.toLowerCase().trim();
+          const isEligible =
+            eligibleTypes.has(examTargetNameLower) ||
+            directTargetIds.has(exam.examTargetId);
+
+          if (!isEligible) {
+            const studentTargetLabel = student.examTarget?.name || 'Unassigned';
+            throw new ForbiddenException({
+              code: 'EXAM_NOT_ELIGIBLE',
+              message: `You are not eligible to take this examination. Your registered target is '${studentTargetLabel}', but this exam is for '${exam.examTarget.name}'.`,
+            });
+          }
         }
       }
 

@@ -13,6 +13,7 @@ import {
   SortOrderEnum,
 } from '../dto/admin-students.dto';
 import { Prisma, StudentStatus, ParentLinkStatus, ParentRelationshipType } from '@prisma/client';
+import { CANONICAL_TARGET_EXAMS } from '../../../common/constants/target-exam.constant';
 
 @Injectable()
 export class AdminStudentsService {
@@ -757,15 +758,7 @@ export class AdminStudentsService {
         type: 'SCHOOL',
       }));
 
-    const TARGET_ORDER = [
-      'JEE',
-      'CET',
-      'NEET',
-      'NEET and JEE',
-      'NEET and State CET',
-      'JEE and State CET',
-      'JEE, NEET and State CET',
-    ];
+    const TARGET_ORDER = CANONICAL_TARGET_EXAMS;
     const filteredExamTargets = examTargets
       .filter((t) => TARGET_ORDER.some((name) => name.toLowerCase() === t.name?.trim().toLowerCase()))
       .sort((a, b) => {
@@ -820,15 +813,7 @@ export class AdminStudentsService {
         }),
       ]);
 
-    const TARGET_ORDER = [
-      'JEE',
-      'CET',
-      'NEET',
-      'NEET and JEE',
-      'NEET and State CET',
-      'JEE and State CET',
-      'JEE, NEET and State CET',
-    ];
+    const TARGET_ORDER = CANONICAL_TARGET_EXAMS;
     const filteredExamTargets = examTargets
       .filter((t) => TARGET_ORDER.some((name) => name.toLowerCase() === t.name?.trim().toLowerCase()))
       .sort((a, b) => {

@@ -24,6 +24,10 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator';
   'ACCOUNTANT',
   'SALES_AGENT',
   'STAFF',
+  'STUDENT',
+  'PARENT',
+  'TEACHER',
+  'INSTITUTION',
 )
 export class CompletedExamReportsController {
   constructor(
@@ -146,6 +150,7 @@ export class CompletedExamReportsController {
     'admin/completed-exams/:examId/attempts/:attemptId/approve',
     'super-admin/completed-exams/:examId/attempts/:attemptId/approve',
   ])
+  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER', 'OPERATOR', 'STAFF')
   async approveReport(
     @Param('examId') examId: string,
     @Param('attemptId') attemptId: string,
@@ -172,6 +177,7 @@ export class CompletedExamReportsController {
     'admin/completed-exams/:examId/attempts/:attemptId/send-report',
     'super-admin/completed-exams/:examId/attempts/:attemptId/send-report',
   ])
+  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER', 'OPERATOR', 'STAFF')
   async sendStudentReportEmail(
     @Param('examId') examId: string,
     @Param('attemptId') attemptId: string,
@@ -198,6 +204,7 @@ export class CompletedExamReportsController {
     'admin/completed-exams/:examId/attempts/:attemptId/send-report-to-institute',
     'super-admin/completed-exams/:examId/attempts/:attemptId/send-report-to-institute',
   ])
+  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER', 'OPERATOR', 'STAFF')
   async sendInstituteReportEmail(
     @Param('examId') examId: string,
     @Param('attemptId') attemptId: string,
@@ -224,6 +231,7 @@ export class CompletedExamReportsController {
     'admin/completed-exams/:examId/send-all-reports',
     'super-admin/completed-exams/:examId/send-all-reports',
   ])
+  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER', 'OPERATOR', 'STAFF')
   async sendAllReportEmails(
     @Param('examId') examId: string,
     @CurrentUser() user: any,

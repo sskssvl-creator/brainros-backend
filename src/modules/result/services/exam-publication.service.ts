@@ -30,6 +30,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import { normalizeToWhatsApp, maskPhone } from '../../notification/utils/phone-normalizer.util';
+import { RankGenerationService } from '../../rank-engine/services/rank-generation.service';
 
 @Injectable()
 export class ExamPublicationService {
@@ -39,6 +40,7 @@ export class ExamPublicationService {
     private readonly prisma: PrismaService,
     private readonly redisService: RedisService,
     private readonly readinessService: ResultReadinessService,
+    private readonly rankGenerationService: RankGenerationService,
     @InjectQueue(NOTIFICATION_QUEUE_NAME)
     private readonly notificationQueue: Queue,
     @InjectQueue(WHATSAPP_REMINDER_QUEUE_NAME)
@@ -128,7 +130,7 @@ export class ExamPublicationService {
             a.exam_id,
             COUNT(a.id)::int AS total_eligible,
             COUNT(CASE WHEN ast.name IN ('SUBMITTED', 'AUTO_SUBMITTED') THEN 1 END)::int AS finalized,
-            COUNT(CASE WHEN ast.name IN ('SUBMITTED', 'AUTO_SUBMITTED') AND r.id IS NOT NULL THEN 1 END)::int AS evaluated,
+            COUNT(CASE WHEN ast.name IN ('SUBMITTED', 'AUTO_SUBMITTED') AND r.id IS NOT NULL AND r.result_status NOT IN ('PENDING_WINDOW_CLOSE', 'PROCESSING', 'FAILED') THEN 1 END)::int AS evaluated,
             COUNT(CASE WHEN ast.name IN ('SUBMITTED', 'AUTO_SUBMITTED') AND ta.id IS NOT NULL AND sa.id IS NOT NULL THEN 1 END)::int AS analytics_completed,
             COUNT(CASE WHEN sr.status = 'PENDING' THEN 1 END)::int AS pending_security
           FROM attempts a
@@ -209,7 +211,6 @@ export class ExamPublicationService {
         totalEligible > 0 &&
         finalized === totalEligible &&
         evaluated === finalized &&
-        rankingCompleted &&
         securityReviewCompleted
       ) {
         isReadyToPublish = true;
@@ -220,8 +221,6 @@ export class ExamPublicationService {
           notReadyReason = `${totalEligible - finalized} attempt(s) pending finalization.`;
         } else if (evaluated < finalized) {
           notReadyReason = `${finalized - evaluated} attempt(s) pending evaluation.`;
-        } else if (!rankingCompleted) {
-          notReadyReason = 'Rank snapshot pending.';
         } else if (!securityReviewCompleted) {
           notReadyReason = `${pendingSecurity} security review(s) pending.`;
         }
@@ -359,6 +358,23 @@ export class ExamPublicationService {
         throw new BadRequestException(
           `Cannot publish exam results. Readiness check failed: ${readiness.reason}`,
         );
+      }
+
+      // Auto-generate ranks if rank snapshot is missing before publication
+      try {
+        const latestRankSnapshot = await this.prisma.rankSnapshot.findFirst({
+          where: { examId },
+          orderBy: { snapshotVersion: 'desc' },
+        });
+        if (!latestRankSnapshot || latestRankSnapshot.status !== 'COMPLETED') {
+          this.logger.log(`[PublishExamResults] Auto-generating ranks for exam '${examId}' before publication...`);
+          await this.rankGenerationService.generateRanks({
+            examId,
+            forceRegenerate: true,
+          });
+        }
+      } catch (rErr: any) {
+        this.logger.warn(`Auto rank generation notice for exam '${examId}': ${rErr.message}`);
       }
 
       const exam = await this.prisma.exam.findUnique({

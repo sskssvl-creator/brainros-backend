@@ -17,6 +17,9 @@ describe('RecommendationEngineService', () => {
       exam: {
         findFirst: jest.fn(),
       },
+      examTarget: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
     };
 
     const module: TestingModule = await Test.createTestingModule({

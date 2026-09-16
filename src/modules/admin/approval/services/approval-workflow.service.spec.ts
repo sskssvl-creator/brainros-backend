@@ -49,6 +49,9 @@ describe('ApprovalWorkflowService (Central Workflow & Self-Approval Prevention)'
         findMany: jest.fn(),
         count: jest.fn(),
       },
+      user: {
+        findUnique: jest.fn(),
+      },
       $transaction: jest.fn((cb) =>
         typeof cb === 'function' ? cb(prisma) : Promise.all(cb),
       ),

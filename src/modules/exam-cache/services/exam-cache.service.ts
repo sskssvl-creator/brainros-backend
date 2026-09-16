@@ -40,6 +40,17 @@ export class ExamCacheService {
   }
 
   /**
+   * Invalidate student dashboard cached snapshots when exams/schedules change
+   */
+  public async invalidateStudentDashboards(): Promise<void> {
+    try {
+      await this.redisService.delByPattern('student:*:dashboard');
+    } catch (err: any) {
+      this.logger.warn(`Failed to invalidate student dashboards: ${err.message}`);
+    }
+  }
+
+  /**
    * Calculates Redis TTL in seconds:
    * TTL = (officialExamEndTime - currentTime) + safetyBuffer
    */

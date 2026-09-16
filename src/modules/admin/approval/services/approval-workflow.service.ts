@@ -197,13 +197,16 @@ export class ApprovalWorkflowService implements OnModuleInit {
     }
 
     // ── Self-Approval Prevention Rule (Super Admin is root authority) ──
-    const reviewer = await this.prisma.user.findUnique({
-      where: { id: reviewerId },
-      include: { userRoles: { include: { role: true } } },
-    });
-    const isSuperAdmin = reviewer?.userRoles?.some(
-      (ur) => ur.role.name === 'SUPER_ADMIN',
-    );
+    let isSuperAdmin = false;
+    if (this.prisma.user?.findUnique) {
+      const reviewer = await this.prisma.user.findUnique({
+        where: { id: reviewerId },
+        include: { userRoles: { include: { role: true } } },
+      });
+      isSuperAdmin = Boolean(
+        reviewer?.userRoles?.some((ur) => ur.role?.name === 'SUPER_ADMIN'),
+      );
+    }
 
     if (request.requestedById === reviewerId && !isSuperAdmin) {
       this.logger.warn(

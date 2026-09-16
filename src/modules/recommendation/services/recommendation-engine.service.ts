@@ -6,6 +6,7 @@ import {
   RecommendationPriority,
   RecommendationConfidence,
 } from '../interfaces/recommendation.interface';
+import { resolveEligibleExamTypes } from '../../../common/constants/target-exam.constant';
 
 const DEFAULT_OPTIONS: Required<RecommendationEngineOptions> = {
   lookbackAttempts: 5,
@@ -48,10 +49,38 @@ export class RecommendationEngineService {
       return [];
     }
 
-    const targetIds = [
-      student.examTargetId,
-      ...(student.studentExamTargets?.map((t) => t.examTargetId) || []),
-    ].filter(Boolean) as string[];
+    const rawTargetNames: string[] = [];
+    if (student.examTarget?.name) rawTargetNames.push(student.examTarget.name);
+    if (Array.isArray(student.studentExamTargets)) {
+      student.studentExamTargets.forEach((st: any) => {
+        if (st.examTarget?.name) rawTargetNames.push(st.examTarget.name);
+      });
+    }
+
+    const eligibleExamTypeNames = new Set<string>();
+    for (const name of rawTargetNames) {
+      const resolved = resolveEligibleExamTypes(name);
+      resolved.forEach((t) => eligibleExamTypeNames.add(t));
+    }
+
+    const directIds = [
+      ...(student.examTargetId ? [student.examTargetId] : []),
+      ...(student.studentExamTargets?.map((st: any) => st.examTargetId) || []),
+    ];
+
+    const matchingTargets = await this.prisma.examTarget.findMany({
+      where: {
+        OR: [
+          { name: { in: Array.from(eligibleExamTypeNames) } },
+          { id: { in: directIds } },
+        ],
+      },
+      select: { id: true },
+    });
+
+    const targetIds = Array.from(
+      new Set([...matchingTargets.map((t) => t.id), ...directIds]),
+    );
 
     // 2. Fetch completed evaluated attempts (latest N)
     const evaluatedAttempts: any[] = await this.prisma.attempt.findMany({
