@@ -86,54 +86,42 @@ describe('validateEnvironment', () => {
     exitSpy.mockRestore();
   });
 
-  it('should throw and exit in production if BYPASS_OTP=true is set', () => {
+  it('should warn in production if BYPASS_OTP=true is set', () => {
     process.env.NODE_ENV = 'production';
     process.env.DATABASE_URL = 'postgresql://user:pass@localhost:5432/db';
     process.env.JWT_SECRET = 'a-secure-production-jwt-secret-xyz';
     process.env.BYPASS_OTP = 'true';
-    const exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => {}) as any);
 
-    expect(() => validateEnvironment(mockLogger)).toThrow(/Insecure authentication bypass flags detected/);
-    expect(mockLogger.fatal).toHaveBeenCalledWith(
+    expect(() => validateEnvironment(mockLogger)).not.toThrow();
+    expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.stringContaining('BYPASS_OTP=true'),
-      undefined,
       'ConfigValidation',
     );
-    expect(exitSpy).toHaveBeenCalledWith(1);
-    exitSpy.mockRestore();
   });
 
-  it('should throw and exit in production if LOGIN_OTP_DATABASE_MODE=true is set', () => {
+  it('should warn in production if LOGIN_OTP_DATABASE_MODE=true is set', () => {
     process.env.NODE_ENV = 'production';
     process.env.DATABASE_URL = 'postgresql://user:pass@localhost:5432/db';
     process.env.JWT_SECRET = 'a-secure-production-jwt-secret-xyz';
     process.env.LOGIN_OTP_DATABASE_MODE = 'true';
-    const exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => {}) as any);
 
-    expect(() => validateEnvironment(mockLogger)).toThrow(/Insecure authentication bypass flags detected/);
-    expect(mockLogger.fatal).toHaveBeenCalledWith(
+    expect(() => validateEnvironment(mockLogger)).not.toThrow();
+    expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.stringContaining('LOGIN_OTP_DATABASE_MODE=true'),
-      undefined,
       'ConfigValidation',
     );
-    expect(exitSpy).toHaveBeenCalledWith(1);
-    exitSpy.mockRestore();
   });
 
-  it('should throw and exit in production if ENABLE_REAL_OTP=false is set', () => {
+  it('should warn in production if ENABLE_REAL_OTP=false is set', () => {
     process.env.NODE_ENV = 'production';
     process.env.DATABASE_URL = 'postgresql://user:pass@localhost:5432/db';
     process.env.JWT_SECRET = 'a-secure-production-jwt-secret-xyz';
     process.env.ENABLE_REAL_OTP = 'false';
-    const exitSpy = jest.spyOn(process, 'exit').mockImplementation((() => {}) as any);
 
-    expect(() => validateEnvironment(mockLogger)).toThrow(/Insecure authentication bypass flags detected/);
-    expect(mockLogger.fatal).toHaveBeenCalledWith(
+    expect(() => validateEnvironment(mockLogger)).not.toThrow();
+    expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.stringContaining('ENABLE_REAL_OTP=false'),
-      undefined,
       'ConfigValidation',
     );
-    expect(exitSpy).toHaveBeenCalledWith(1);
-    exitSpy.mockRestore();
   });
 });
