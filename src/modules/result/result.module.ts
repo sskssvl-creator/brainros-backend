@@ -15,6 +15,7 @@ import { ExamSchedulingModule } from '../exam-scheduling/exam-scheduling.module'
 import { NotificationModule } from '../notification/notification.module';
 import { TimeAnalysisModule } from '../time-analysis/time-analysis.module';
 import { AttemptStrategyModule } from '../attempt-strategy/attempt-strategy.module';
+import { AdminModule } from '../admin/admin.module';
 import {
   EVALUATION_QUEUE_NAME,
   ANALYTICS_QUEUE_NAME,
@@ -38,6 +39,7 @@ import { ResultProcessingMonitorService } from './services/result-processing-mon
     RankEngineModule,
     TimeAnalysisModule,
     AttemptStrategyModule,
+    forwardRef(() => AdminModule),
     forwardRef(() => ExamSchedulingModule),
     forwardRef(() => NotificationModule),
     BullModule.registerQueue(

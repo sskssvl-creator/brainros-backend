@@ -8,6 +8,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { AnalysisEngineService } from './services/analysis-engine.service';
 import { ResultAccessService } from './services/result-access.service';
+import { ExamReportPdfService, ExamReportPdfData } from '../admin/services/exam-report-pdf.service';
 import {
   DEFAULT_PERFORMANCE_THRESHOLDS,
   PerformanceThresholds,
@@ -26,6 +27,7 @@ export class ResultService {
     private readonly prisma: PrismaService,
     private readonly analysisEngine: AnalysisEngineService,
     private readonly resultAccessService: ResultAccessService,
+    private readonly pdfService: ExamReportPdfService,
   ) {}
 
   /**
@@ -971,5 +973,193 @@ export class ResultService {
       default:
         return false;
     }
+  }
+
+  /**
+   * Generate downloadable PDF Analysis Report for a student attempt.
+   */
+  async generateAnalysisReportPdf(attemptId: string, user?: any): Promise<{ buffer: Buffer; filename: string }> {
+    const attempt = await this.prisma.attempt.findUnique({
+      where: { id: attemptId },
+      include: {
+        exam: true,
+        student: { include: { user: true } },
+        result: true,
+        candidateRanks: { where: { rankType: 'OVERALL' }, take: 1 },
+        timeAnalyses: { take: 1, orderBy: { createdAt: 'desc' } },
+        strategyAnalyses: { take: 1, orderBy: { createdAt: 'desc' } },
+      },
+    });
+
+    if (!attempt || !attempt.result) {
+      throw new NotFoundException('Analysis not available. Result has not been calculated yet.');
+    }
+
+    const fullAnalysis = await this.getFullAnalysis(attemptId, user);
+    const reviewData = (await this.getAnswerReview(attemptId, user)) || [];
+
+    const rankData = attempt.candidateRanks[0];
+    const fallbackTimeAnalysis = attempt.timeAnalyses[0];
+    const fallbackStrategyAnalysis = attempt.strategyAnalyses[0];
+    const targetEmail = user?.email || attempt.student.user?.email || 'student@brainros.com';
+
+    const pdfData: ExamReportPdfData = {
+      student: {
+        name: attempt.student.name,
+        studentCode: attempt.student.studentCode || attempt.student.studentId,
+        email: targetEmail,
+      },
+      exam: {
+        title: attempt.exam.title,
+        examDate: attempt.exam.examDate || attempt.startedAt || attempt.createdAt,
+        totalMarks: attempt.exam.totalMarks,
+        durationMinutes: attempt.exam.durationMinutes,
+        examTargetName: (fullAnalysis as any)?.examTargetName,
+      },
+      attempt: {
+        id: attempt.id,
+        submittedAt: attempt.submittedAt || attempt.updatedAt,
+        score: attempt.result.totalScore,
+        maxScore: attempt.result.maxScore,
+        percentage: attempt.result.percentage,
+        accuracy: attempt.result.accuracy,
+        totalQuestions: attempt.result.totalQuestions,
+        correctAnswers: attempt.result.correctAnswers,
+        wrongAnswers: attempt.result.wrongAnswers,
+        unattempted: attempt.result.unattempted,
+        timeUsedSeconds: attempt.result.timeUsedSeconds ?? (fullAnalysis as any)?.overall?.timeUsedSeconds ?? undefined,
+        formattedTimeUsed: (fullAnalysis as any)?.overall?.formattedTimeUsed,
+        averageTimePerQuestion: attempt.result.averageTimePerQuestion ?? (fullAnalysis as any)?.overall?.averageTimePerQuestionSeconds ?? undefined,
+        negativeMarksLost: (fullAnalysis as any)?.overall?.negativeMarksLost ?? (attempt.result.wrongAnswers * 1),
+        potentialMarks: (fullAnalysis as any)?.overall?.potentialMarks,
+        overallStatus: (fullAnalysis as any)?.overall?.overallStatus,
+        speedAccuracyQuadrant: (fullAnalysis as any)?.overall?.speedAccuracyQuadrant,
+      },
+      rank: rankData
+        ? {
+            rank: rankData.rank,
+            totalCandidates: rankData.totalCandidates,
+            percentile: rankData.percentile ? Number(rankData.percentile) : undefined,
+          }
+        : undefined,
+      subjects: (fullAnalysis as any)?.subjects?.items?.length
+        ? (fullAnalysis as any).subjects.items.map((sub: any) => ({
+            name: sub.subjectName || sub.name || 'Subject',
+            score: sub.score,
+            maxScore: sub.maxScore,
+            accuracy: sub.accuracy,
+            percentage: sub.percentage,
+            correct: sub.correct,
+            wrong: sub.wrong,
+            unattempted: sub.unattempted,
+            timeSpentSeconds: sub.timeSpentSeconds,
+            avgTimePerQuestionSeconds: sub.avgTimePerQuestionSeconds,
+            performanceStatus: sub.status,
+            isStrongest: sub.isStrongest,
+            isWeakest: sub.isWeakest,
+          }))
+        : [],
+      chapters: {
+        mastered: (fullAnalysis as any)?.chapters?.mastered?.map((ch: any) => ({
+          name: ch.chapterName || ch.name,
+          subjectName: ch.subjectName,
+          accuracy: ch.accuracy,
+          totalQuestions: ch.totalQuestions,
+          performanceStatus: ch.status,
+        })),
+        revisionNeeded: (fullAnalysis as any)?.chapters?.revisionNeeded?.map((ch: any) => ({
+          name: ch.chapterName || ch.name,
+          subjectName: ch.subjectName,
+          accuracy: ch.accuracy,
+          totalQuestions: ch.totalQuestions,
+          performanceStatus: ch.status,
+        })),
+        criticalFocus: (fullAnalysis as any)?.chapters?.criticalFocus?.map((ch: any) => ({
+          name: ch.chapterName || ch.name,
+          subjectName: ch.subjectName,
+          accuracy: ch.accuracy,
+          totalQuestions: ch.totalQuestions,
+          performanceStatus: ch.status,
+        })),
+      },
+      timeAnalysis: (fullAnalysis as any)?.timeAnalysis
+        ? {
+            totalExamDurationMinutes: (fullAnalysis as any).timeAnalysis.totalExamDurationMinutes,
+            totalTimeUsedSeconds: (fullAnalysis as any).timeAnalysis.totalTimeUsedSeconds,
+            averageTimePerQuestionSeconds: (fullAnalysis as any).timeAnalysis.averageTimePerQuestionSeconds,
+            timeOnCorrectSeconds: (fullAnalysis as any).timeAnalysis.timeOnCorrectQuestionsSeconds,
+            timeOnWrongSeconds: (fullAnalysis as any).timeAnalysis.timeOnWrongQuestionsSeconds,
+            timeOnUnattemptedSeconds: (fullAnalysis as any).timeAnalysis.timeOnUnattemptedQuestionsSeconds,
+            timeWastedSeconds: (fullAnalysis as any).timeAnalysis.timeWastedSeconds,
+            fastestQuestionSeconds: (fullAnalysis as any).timeAnalysis.fastestQuestion?.timeSeconds,
+            slowestQuestionSeconds: (fullAnalysis as any).timeAnalysis.slowestQuestion?.timeSeconds,
+            pacingMetrics: (fullAnalysis as any).timeAnalysis.pacingMetrics,
+          }
+        : fallbackTimeAnalysis
+        ? {
+            averageTimePerQuestionSeconds: (fallbackTimeAnalysis.data as any)?.avgTimePerQuestion,
+            fastestQuestionSeconds: (fallbackTimeAnalysis.data as any)?.fastestQuestionTimeSeconds,
+            slowestQuestionSeconds: (fallbackTimeAnalysis.data as any)?.slowestQuestionTimeSeconds,
+          }
+        : undefined,
+      strategy: (fullAnalysis as any)?.detailedStrategy
+        ? {
+            primaryClassification: (fullAnalysis as any).detailedStrategy.primaryClassificationLabel || (fullAnalysis as any).detailedStrategy.primaryClassification?.replace(/_/g, ' '),
+            confidence: (fullAnalysis as any).detailedStrategy.confidence,
+            whyStatement: (fullAnalysis as any).detailedStrategy.whyStatement,
+            secondaryClassifications: (fullAnalysis as any).detailedStrategy.secondaryClassifications,
+            trend: (fullAnalysis as any).detailedStrategy.trend,
+            negativeMarkingPenalty: (fullAnalysis as any).attemptStrategy?.negativeMarkingPenalty,
+            marksLostToGuessing: (fullAnalysis as any).attemptStrategy?.marksLostToGuessing,
+            scoreWithoutNegativeMarking: (fullAnalysis as any).attemptStrategy?.scoreWithoutNegativeMarking,
+            attemptRatio: (fullAnalysis as any).attemptStrategy?.attemptRatio,
+            accuracyVsSpeedProfile: (fullAnalysis as any).attemptStrategy?.accuracyVsSpeedProfile,
+            strategicTakeaways: (fullAnalysis as any).attemptStrategy?.strategicTakeaways,
+            potentialScoreGainMessage: (fullAnalysis as any).attemptStrategy?.potentialScoreGainMessage,
+          }
+        : (fullAnalysis as any)?.attemptStrategy
+        ? {
+            negativeMarkingPenalty: (fullAnalysis as any).attemptStrategy.negativeMarkingPenalty,
+            marksLostToGuessing: (fullAnalysis as any).attemptStrategy.marksLostToGuessing,
+            scoreWithoutNegativeMarking: (fullAnalysis as any).attemptStrategy.scoreWithoutNegativeMarking,
+            attemptRatio: (fullAnalysis as any).attemptStrategy.attemptRatio,
+            accuracyVsSpeedProfile: (fullAnalysis as any).attemptStrategy.accuracyVsSpeedProfile,
+            strategicTakeaways: (fullAnalysis as any).attemptStrategy.strategicTakeaways,
+            potentialScoreGainMessage: (fullAnalysis as any).attemptStrategy.potentialScoreGainMessage,
+          }
+        : fallbackStrategyAnalysis
+        ? {
+            overAttemptingScore: (fallbackStrategyAnalysis.data as any)?.overAttemptCount || 0,
+            avoidableLossMarks: fallbackStrategyAnalysis.avoidableNegativeMarks,
+            riskCategory: fallbackStrategyAnalysis.primaryClassification,
+            primaryClassification: fallbackStrategyAnalysis.primaryClassification,
+          }
+        : undefined,
+      recommendations: (fullAnalysis as any)?.recommendations?.map((rec: any) => ({
+        category: rec.category,
+        priority: rec.priority,
+        title: rec.title,
+        description: rec.description,
+        actionStep: rec.actionStep,
+        impactScore: rec.impactScore,
+      })),
+      questionsReview: Array.isArray(reviewData) ? reviewData.map((q: any) => ({
+        displayOrder: q.displayOrder,
+        sectionName: q.sectionName,
+        questionText: q.questionText,
+        isAttempted: q.isAttempted,
+        isCorrect: q.isCorrect,
+        marksAwarded: q.marksAwarded,
+        timeSpentSeconds: q.timeSpentSeconds,
+        givenAnswer: q.userAnswer || q.givenAnswer || q.selectedOptionText || (q.selectedOptionId ? `Option ${q.selectedOptionId}` : undefined),
+        correctAnswer: q.correctAnswer || q.correctOptionText || (q.correctOptionId ? `Option ${q.correctOptionId}` : undefined),
+      })) : [],
+    };
+
+    const buffer = await this.pdfService.generateReportPdf(pdfData);
+    const safeExam = attempt.exam.title.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 30);
+    const filename = `Brainros_${safeExam}_Report.pdf`;
+
+    return { buffer, filename };
   }
 }

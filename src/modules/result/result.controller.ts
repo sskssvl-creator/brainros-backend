@@ -7,7 +7,9 @@ import {
   Query,
   UseGuards,
   HttpStatus,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { ResultService } from './result.service';
 import { ResultAccessService } from './services/result-access.service';
 import { ResultReadinessService } from './services/result-readiness.service';
@@ -105,6 +107,25 @@ export class ResultController {
     @CurrentUser() user: any,
   ) {
     return this.resultService.getFullAnalysis(attemptId, user);
+  }
+
+  /**
+   * Direct Download of Complete PDF Performance Analysis Report
+   * Supports:
+   *  GET /results/:attemptId/pdf
+   *  GET /students/me/results/:attemptId/pdf
+   */
+  @Get(['results/:attemptId/pdf', 'students/me/results/:attemptId/pdf'])
+  async downloadAnalysisPdf(
+    @Param('attemptId') attemptId: string,
+    @CurrentUser() user: any,
+    @Res() res: Response,
+  ) {
+    const { buffer, filename } = await this.resultService.generateAnalysisReportPdf(attemptId, user);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.length.toString());
+    res.send(buffer);
   }
 
   @Get('results/:attemptId/subjects')

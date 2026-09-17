@@ -75,6 +75,11 @@ export interface ExamReportPdfData {
     };
   };
   strategy?: {
+    primaryClassification?: string;
+    confidence?: string;
+    whyStatement?: string;
+    secondaryClassifications?: string[];
+    trend?: string;
     negativeMarkingPenalty?: number;
     marksLostToGuessing?: number;
     scoreWithoutNegativeMarking?: number;
@@ -103,6 +108,8 @@ export interface ExamReportPdfData {
     isCorrect: boolean;
     marksAwarded: number;
     timeSpentSeconds?: number;
+    givenAnswer?: string;
+    correctAnswer?: string;
   }>;
 }
 
@@ -387,45 +394,47 @@ export class ExamReportPdfService {
         p2Y += 98;
 
         // 3. Attempt Strategy & Negative Marking Penalty
-        doc.fillColor(secondaryColor).fontSize(11).font('Helvetica-Bold').text('Attempt Strategy & Negative Marking Impact', 40, p2Y);
+        doc.fillColor(secondaryColor).fontSize(11).font('Helvetica-Bold').text('Attempt Strategy & AI Diagnostic Analysis', 40, p2Y);
         p2Y += 16;
 
-        doc.rect(40, p2Y, 515, 90).fillAndStroke(lightBg, borderColor);
+        const stratDiagH = data.strategy?.whyStatement ? 115 : 90;
+        doc.rect(40, p2Y, 515, stratDiagH).fillAndStroke(lightBg, borderColor);
 
         const negPenalty = data.strategy?.negativeMarkingPenalty ?? data.strategy?.avoidableLossMarks ?? (data.attempt.wrongAnswers * 1);
         const potScore = data.strategy?.scoreWithoutNegativeMarking ?? (data.attempt.score + negPenalty);
-        const riskProf = (data.strategy?.riskCategory || (data.attempt.accuracy < 60 ? 'HIGH_RISK' : 'BALANCED')).replace(/_/g, ' ');
+        const riskProf = (data.strategy?.primaryClassification || data.strategy?.riskCategory || (data.attempt.accuracy < 60 ? 'HIGH_RISK' : 'BALANCED')).replace(/_/g, ' ');
 
-        doc.fillColor(primaryColor).fontSize(8.5).font('Helvetica-Bold').text('Negative Marking Diagnostic', 52, p2Y + 10);
-        doc.fillColor(accentRose).fontSize(12).font('Helvetica-Bold').text(`-${negPenalty} Marks Lost`, 52, p2Y + 26);
-        doc.fillColor(mutedText).fontSize(7.5).font('Helvetica').text('Avoidable Negative Loss', 52, p2Y + 44);
+        doc.fillColor(primaryColor).fontSize(8.5).font('Helvetica-Bold').text('AI Strategy Classification', 52, p2Y + 10);
+        doc.fillColor(secondaryColor).fontSize(11).font('Helvetica-Bold').text(riskProf, 52, p2Y + 24);
+        if (data.strategy?.confidence) {
+          doc.fillColor(primaryColor).fontSize(7.5).font('Helvetica-Bold').text(`[Confidence: ${data.strategy.confidence}]`, 52, p2Y + 40);
+        }
 
-        doc.fillColor(primaryColor).fontSize(8.5).font('Helvetica-Bold').text('Projected Potential Score', 200, p2Y + 10);
-        doc.fillColor(accentEmerald).fontSize(12).font('Helvetica-Bold').text(`${potScore} / ${data.attempt.maxScore}`, 200, p2Y + 26);
-        doc.fillColor(mutedText).fontSize(7.5).font('Helvetica').text('If wrong guesses were skipped', 200, p2Y + 44);
+        doc.fillColor(primaryColor).fontSize(8.5).font('Helvetica-Bold').text('Negative Marking Diagnostic', 220, p2Y + 10);
+        doc.fillColor(accentRose).fontSize(12).font('Helvetica-Bold').text(`-${negPenalty} Marks Lost`, 220, p2Y + 24);
+        doc.fillColor(mutedText).fontSize(7.5).font('Helvetica').text('Avoidable Negative Loss', 220, p2Y + 40);
 
-        doc.fillColor(primaryColor).fontSize(8.5).font('Helvetica-Bold').text('Strategy Risk Profile', 360, p2Y + 10);
-        doc.fillColor(darkText).fontSize(11).font('Helvetica-Bold').text(riskProf, 360, p2Y + 26);
-        const attemptRatioStr = data.strategy?.attemptRatio ? `${Number(data.strategy.attemptRatio).toFixed(1)}% exam attempted` : `${data.attempt.totalQuestions - data.attempt.unattempted} questions attempted`;
-        doc.fillColor(mutedText).fontSize(7.5).font('Helvetica').text(attemptRatioStr, 360, p2Y + 44);
+        doc.fillColor(primaryColor).fontSize(8.5).font('Helvetica-Bold').text('Projected Potential Score', 380, p2Y + 10);
+        doc.fillColor(accentEmerald).fontSize(12).font('Helvetica-Bold').text(`${potScore} / ${data.attempt.maxScore}`, 380, p2Y + 24);
+        doc.fillColor(mutedText).fontSize(7.5).font('Helvetica').text('If wrong guesses were skipped', 380, p2Y + 40);
 
-        const gainMsg = data.strategy?.potentialScoreGainMessage || `Eliminating low-confidence guesses could recover approximately ~${negPenalty} marks.`;
-        doc.rect(52, p2Y + 62, 491, 20).fill('#EEF2FF');
-        doc.fillColor(primaryColor).fontSize(7.5).font('Helvetica-Bold').text('Strategic Takeaway:', 60, p2Y + 67);
-        doc.fillColor(darkText).fontSize(7.5).font('Helvetica').text(gainMsg, 155, p2Y + 67, { width: 380, lineBreak: false });
+        const gainMsg = data.strategy?.whyStatement || data.strategy?.potentialScoreGainMessage || `Eliminating low-confidence guesses could recover approximately ~${negPenalty} marks.`;
+        doc.rect(52, p2Y + 58, 491, stratDiagH - 66).fill('#EEF2FF');
+        doc.fillColor(primaryColor).fontSize(7.5).font('Helvetica-Bold').text('AI Diagnostic Insight:', 60, p2Y + 63);
+        doc.fillColor(darkText).fontSize(7.5).font('Helvetica').text(gainMsg, 160, p2Y + 63, { width: 375, height: stratDiagH - 74 });
 
         // Page 2 Footer
         const p2FooterY = 780;
         doc.rect(40, p2FooterY, 515, 0.5).fill(borderColor);
         doc.fillColor(mutedText).fontSize(7).font('Helvetica').text(
-          `Page 2 of 3   •   Brainros Assessment Engine   •   Actionable Recommendations continue on Page 3`,
+          `Page 2 of Report   •   Brainros Assessment Engine   •   Actionable Recommendations & Audit continue on next page`,
           40,
           p2FooterY + 6,
           { width: 515, align: 'center' },
         );
 
         // ═══════════════════════════════════════════════════════════════
-        // PAGE 3: RECOMMENDATIONS & QUESTION-BY-QUESTION AUDIT
+        // PAGE 3+: RECOMMENDATIONS & QUESTION-BY-QUESTION AUDIT
         // ═══════════════════════════════════════════════════════════════
         doc.addPage();
 
@@ -479,15 +488,17 @@ export class ExamReportPdfService {
         doc.fillColor(secondaryColor).fontSize(11).font('Helvetica-Bold').text('Question-by-Question Response Audit Breakdown', 40, p3Y);
         p3Y += 16;
 
-        // Mini table header
-        doc.rect(40, p3Y, 515, 18).fill(secondaryColor);
-        doc.fillColor('#FFFFFF').fontSize(7.5).font('Helvetica-Bold');
-        doc.text('Q#', 50, p3Y + 5);
-        doc.text('SECTION', 85, p3Y + 5);
-        doc.text('STATUS', 240, p3Y + 5);
-        doc.text('TIME SPENT', 340, p3Y + 5);
-        doc.text('MARKS AWARDED', 440, p3Y + 5);
-        p3Y += 18;
+        const drawTableHeader = (yPos: number) => {
+          doc.rect(40, yPos, 515, 18).fill(secondaryColor);
+          doc.fillColor('#FFFFFF').fontSize(7.5).font('Helvetica-Bold');
+          doc.text('Q#', 48, yPos + 5);
+          doc.text('SECTION', 78, yPos + 5);
+          doc.text('STATUS', 185, yPos + 5);
+          doc.text('ANSWER DETAILS', 255, yPos + 5);
+          doc.text('TIME', 440, yPos + 5);
+          doc.text('MARKS', 490, yPos + 5);
+          return yPos + 18;
+        };
 
         const reviews = data.questionsReview || [];
         if (reviews.length === 0) {
@@ -495,36 +506,45 @@ export class ExamReportPdfService {
           doc.fillColor(mutedText).fontSize(8).font('Helvetica').text('Detailed question audit recorded in student portal review.', 50, p3Y + 7);
           p3Y += 24;
         } else {
-          // Render up to 18 questions on page 3
-          reviews.slice(0, 16).forEach((q, idx) => {
-            const rowBg = idx % 2 === 0 ? '#FFFFFF' : lightBg;
-            doc.rect(40, p3Y, 515, 18).fillAndStroke(rowBg, borderColor);
+          p3Y = drawTableHeader(p3Y);
 
-            doc.fillColor(darkText).fontSize(7.5).font('Helvetica-Bold').text(`Q${q.displayOrder || idx + 1}`, 50, p3Y + 5);
-            doc.fillColor(mutedText).fontSize(7.5).font('Helvetica').text(q.sectionName || 'General', 85, p3Y + 5);
-
-            if (!q.isAttempted) {
-              doc.fillColor(mutedText).fontSize(7.5).font('Helvetica').text('— Skipped', 240, p3Y + 5);
-            } else if (q.isCorrect) {
-              doc.fillColor(accentEmerald).fontSize(7.5).font('Helvetica-Bold').text('✓ Correct', 240, p3Y + 5);
-            } else {
-              doc.fillColor(accentRose).fontSize(7.5).font('Helvetica-Bold').text('✗ Incorrect', 240, p3Y + 5);
+          reviews.forEach((q, idx) => {
+            if (p3Y > 735) {
+              doc.addPage();
+              doc.rect(40, 40, 515, 38).fill(secondaryColor);
+              doc.fillColor('#FFFFFF').fontSize(13).font('Helvetica-Bold').text('BRAINROS — Question Audit (Continued)', 55, 52);
+              doc.fillColor('#94A3B8').fontSize(7.5).font('Helvetica').text(`Candidate: ${data.student.name}`, 320, 54, { width: 220, align: 'right' });
+              p3Y = drawTableHeader(95);
             }
 
+            const rowBg = idx % 2 === 0 ? '#FFFFFF' : lightBg;
+            const rowHeight = 20;
+            doc.rect(40, p3Y, 515, rowHeight).fillAndStroke(rowBg, borderColor);
+
+            doc.fillColor(darkText).fontSize(7.5).font('Helvetica-Bold').text(`Q${q.displayOrder || idx + 1}`, 48, p3Y + 5);
+            doc.fillColor(mutedText).fontSize(7.5).font('Helvetica').text((q.sectionName || 'General').slice(0, 16), 78, p3Y + 5);
+
+            if (!q.isAttempted) {
+              doc.fillColor(mutedText).fontSize(7.5).font('Helvetica').text('— Skipped', 185, p3Y + 5);
+            } else if (q.isCorrect) {
+              doc.fillColor(accentEmerald).fontSize(7.5).font('Helvetica-Bold').text('✓ Correct', 185, p3Y + 5);
+            } else {
+              doc.fillColor(accentRose).fontSize(7.5).font('Helvetica-Bold').text('✗ Incorrect', 185, p3Y + 5);
+            }
+
+            const ansDetail = q.givenAnswer
+              ? `Ans: ${q.givenAnswer.slice(0, 18)}${q.correctAnswer ? ` (Correct: ${q.correctAnswer.slice(0, 14)})` : ''}`
+              : (q.correctAnswer ? `Correct: ${q.correctAnswer.slice(0, 24)}` : '—');
+            doc.fillColor(darkText).fontSize(7).font('Helvetica').text(ansDetail, 255, p3Y + 5, { width: 175 });
+
             const qTimeStr = q.timeSpentSeconds ? `${q.timeSpentSeconds}s` : '—';
-            doc.fillColor(darkText).fontSize(7.5).font('Helvetica').text(qTimeStr, 340, p3Y + 5);
+            doc.fillColor(darkText).fontSize(7.5).font('Helvetica').text(qTimeStr, 440, p3Y + 5);
 
             const marksStr = q.marksAwarded !== undefined ? (q.marksAwarded > 0 ? `+${q.marksAwarded}` : `${q.marksAwarded}`) : '0';
-            doc.fillColor(q.marksAwarded > 0 ? accentEmerald : q.marksAwarded < 0 ? accentRose : mutedText).fontSize(7.5).font('Helvetica-Bold').text(marksStr, 440, p3Y + 5);
+            doc.fillColor(q.marksAwarded > 0 ? accentEmerald : q.marksAwarded < 0 ? accentRose : mutedText).fontSize(7.5).font('Helvetica-Bold').text(marksStr, 490, p3Y + 5);
 
-            p3Y += 18;
+            p3Y += rowHeight;
           });
-
-          if (reviews.length > 16) {
-            doc.rect(40, p3Y, 515, 16).fillAndStroke(lightBg, borderColor);
-            doc.fillColor(mutedText).fontSize(7).font('Helvetica-Bold').text(`... and ${reviews.length - 16} more questions detailed in student portal review`, 50, p3Y + 4);
-            p3Y += 16;
-          }
         }
 
         // Official Verification Footer

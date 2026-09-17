@@ -248,7 +248,22 @@ export class ExamReportEmailProcessor extends WorkerHost {
               slowestQuestionSeconds: (fallbackTimeAnalysis.data as any)?.slowestQuestionTimeSeconds,
             }
           : undefined,
-        strategy: fullAnalysis?.attemptStrategy
+        strategy: fullAnalysis?.detailedStrategy
+          ? {
+              primaryClassification: fullAnalysis.detailedStrategy.primaryClassificationLabel || fullAnalysis.detailedStrategy.primaryClassification?.replace(/_/g, ' '),
+              confidence: fullAnalysis.detailedStrategy.confidence,
+              whyStatement: fullAnalysis.detailedStrategy.whyStatement,
+              secondaryClassifications: fullAnalysis.detailedStrategy.secondaryClassifications,
+              trend: fullAnalysis.detailedStrategy.trend,
+              negativeMarkingPenalty: fullAnalysis.attemptStrategy?.negativeMarkingPenalty,
+              marksLostToGuessing: fullAnalysis.attemptStrategy?.marksLostToGuessing,
+              scoreWithoutNegativeMarking: fullAnalysis.attemptStrategy?.scoreWithoutNegativeMarking,
+              attemptRatio: fullAnalysis.attemptStrategy?.attemptRatio,
+              accuracyVsSpeedProfile: fullAnalysis.attemptStrategy?.accuracyVsSpeedProfile,
+              strategicTakeaways: fullAnalysis.attemptStrategy?.strategicTakeaways,
+              potentialScoreGainMessage: fullAnalysis.attemptStrategy?.potentialScoreGainMessage,
+            }
+          : fullAnalysis?.attemptStrategy
           ? {
               negativeMarkingPenalty: fullAnalysis.attemptStrategy.negativeMarkingPenalty,
               marksLostToGuessing: fullAnalysis.attemptStrategy.marksLostToGuessing,
@@ -263,6 +278,7 @@ export class ExamReportEmailProcessor extends WorkerHost {
               overAttemptingScore: (fallbackStrategyAnalysis.data as any)?.overAttemptCount || 0,
               avoidableLossMarks: fallbackStrategyAnalysis.avoidableNegativeMarks,
               riskCategory: fallbackStrategyAnalysis.primaryClassification,
+              primaryClassification: fallbackStrategyAnalysis.primaryClassification,
               recommendations: Array.isArray(fallbackStrategyAnalysis.recommendations)
                 ? (fallbackStrategyAnalysis.recommendations as any[]).map((r: any) => typeof r === 'string' ? r : r.title || r.description || JSON.stringify(r))
                 : [],
@@ -284,6 +300,8 @@ export class ExamReportEmailProcessor extends WorkerHost {
           isCorrect: q.isCorrect,
           marksAwarded: q.marksAwarded,
           timeSpentSeconds: q.timeSpentSeconds,
+          givenAnswer: q.userAnswer || q.givenAnswer || q.selectedOptionText || (q.selectedOptionId ? `Option ${q.selectedOptionId}` : undefined),
+          correctAnswer: q.correctAnswer || q.correctOptionText || (q.correctOptionId ? `Option ${q.correctOptionId}` : undefined),
         })),
       };
 
