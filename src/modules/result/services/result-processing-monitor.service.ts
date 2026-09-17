@@ -386,13 +386,16 @@ export class ResultProcessingMonitorService {
         : 0;
 
     const latestPub = exam.resultPublications?.[0];
-    const isPublished = Boolean(latestPub);
+    const isPublished = Boolean(
+      latestPub && (latestPub.status === 'PUBLISHED' || latestPub.publishedAt),
+    );
 
     const isReadyToPublish =
-      totalJobs > 0 &&
-      evalCompleted === totalJobs &&
-      failedJobs === 0 &&
-      rankingSnapshotCompleted;
+      (totalJobs > 0 &&
+        evalCompleted === totalJobs &&
+        failedJobs === 0 &&
+        rankingSnapshotCompleted) ||
+      latestPub?.status === 'READY_TO_PUBLISH';
 
     const canPublish = isReadyToPublish && !isPublished;
 

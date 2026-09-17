@@ -31,6 +31,7 @@ import { ExamWindowEndProcessor } from './processors/exam-window-end.processor';
 
 import { ResultProcessingMonitorService } from './services/result-processing-monitor.service';
 import { ExamReportPdfService } from '../admin/services/exam-report-pdf.service';
+import { ResendEmailService } from '../admin/services/resend-email.service';
 
 @Module({
   imports: [
@@ -60,6 +61,7 @@ import { ExamReportPdfService } from '../admin/services/exam-report-pdf.service'
     ExamPublicationService,
     ResultProcessingMonitorService,
     ExamReportPdfService,
+    ResendEmailService,
     EvaluationProcessor,
     AnalyticsProcessor,
     RankingProcessor,

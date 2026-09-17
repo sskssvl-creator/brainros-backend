@@ -54,7 +54,7 @@ export class BillingController {
    * Update global price per student per month fallback setting
    */
   @Put('pricing')
-  @Roles('SUPER_ADMIN')
+  @Roles('SUPER_ADMIN', 'ACCOUNTANT')
   async updatePricing(
     @CurrentUser('userId') userId: string,
     @Body() dto: UpdatePricingDto,
@@ -104,7 +104,7 @@ export class BillingController {
    * Update school-specific price per student per month
    */
   @Patch('schools/:id/price')
-  @Roles('SUPER_ADMIN')
+  @Roles('SUPER_ADMIN', 'ACCOUNTANT')
   async updateSchoolPrice(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') userId: string,
@@ -119,7 +119,7 @@ export class BillingController {
   }
 
   @Patch('schools/:id/pricing')
-  @Roles('SUPER_ADMIN')
+  @Roles('SUPER_ADMIN', 'ACCOUNTANT')
   async updateSchoolPricingPatch(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') userId: string,
@@ -138,7 +138,7 @@ export class BillingController {
    * PUT /billing/schools/:id/pricing
    */
   @Put('schools/:id/price')
-  @Roles('SUPER_ADMIN')
+  @Roles('SUPER_ADMIN', 'ACCOUNTANT')
   async updateSchoolPricePut(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') userId: string,
@@ -153,7 +153,7 @@ export class BillingController {
   }
 
   @Put('schools/:id/pricing')
-  @Roles('SUPER_ADMIN')
+  @Roles('SUPER_ADMIN', 'ACCOUNTANT')
   async updateSchoolPricingPut(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser('userId') userId: string,

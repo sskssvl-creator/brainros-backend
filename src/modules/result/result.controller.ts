@@ -181,6 +181,26 @@ export class ResultController {
   }
 
   /**
+   * Exam Analysis Report Email Dispatch Endpoint
+   * Sends comprehensive PDF report with all details directly to the student's registered email.
+   * Supports:
+   *  POST /results/:attemptId/send-email
+   *  POST /students/me/results/:attemptId/send-email
+   *  POST /admin/attempts/:attemptId/send-report
+   */
+  @Post([
+    'results/:attemptId/send-email',
+    'students/me/results/:attemptId/send-email',
+    'admin/attempts/:attemptId/send-report',
+  ])
+  async sendResultEmail(
+    @Param('attemptId') attemptId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.resultService.sendReportEmail(attemptId, user);
+  }
+
+  /**
    * Admin / Super Admin Exam Result Processing View & Stuck Attempt Detection.
    * GET /admin/exams/:examId/results/processing-status
    * GET /super-admin/exams/:examId/results/processing-status
