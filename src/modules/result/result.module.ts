@@ -30,6 +30,7 @@ import { ResultReconciliationProcessor } from './processors/result-reconciliatio
 import { ExamWindowEndProcessor } from './processors/exam-window-end.processor';
 
 import { ResultProcessingMonitorService } from './services/result-processing-monitor.service';
+import { ExamReportPdfService } from '../admin/services/exam-report-pdf.service';
 
 @Module({
   imports: [
@@ -58,6 +59,7 @@ import { ResultProcessingMonitorService } from './services/result-processing-mon
     ResultAccessService,
     ExamPublicationService,
     ResultProcessingMonitorService,
+    ExamReportPdfService,
     EvaluationProcessor,
     AnalyticsProcessor,
     RankingProcessor,

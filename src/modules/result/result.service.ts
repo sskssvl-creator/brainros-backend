@@ -12,11 +12,8 @@ import {
   DEFAULT_PERFORMANCE_THRESHOLDS,
   PerformanceThresholds,
 } from './interfaces/analysis.interface';
-import {
-  ResultProcessingStatus,
-  ResultPublicationStatus,
-  ResultStatusEnum,
-} from './interfaces/result-lifecycle.interface';
+import { ResultStatusEnum } from './interfaces/result-lifecycle.interface';
+import { ExamReportPdfService, ExamReportPdfData } from '../admin/services/exam-report-pdf.service';
 
 @Injectable()
 export class ResultService {
@@ -26,6 +23,7 @@ export class ResultService {
     private readonly prisma: PrismaService,
     private readonly analysisEngine: AnalysisEngineService,
     private readonly resultAccessService: ResultAccessService,
+    private readonly pdfService: ExamReportPdfService,
   ) {}
 
   /**
@@ -972,4 +970,223 @@ export class ResultService {
         return false;
     }
   }
+
+  /**
+   * Generates a comprehensive 3-page PDF report for an attempt.
+   * Includes overall score, accuracy, rank, percentile, subject breakdown,
+   * chapter diagnosis, time pacing, attempt strategy, smart recommendations,
+   * and full question response audit.
+   */
+  async generateResultPdf(attemptId: string, user?: any): Promise<Buffer> {
+    if (user) {
+      await this.resultAccessService.verifyAttemptAccess(user, attemptId);
+    }
+
+    const attempt = await this.prisma.attempt.findUnique({
+      where: { id: attemptId },
+      include: {
+        exam: true,
+        student: {
+          include: {
+            user: true,
+          },
+        },
+        result: {
+          include: {
+            subjectResults: {
+              include: {
+                subject: true,
+              },
+            },
+            chapterResults: {
+              include: {
+                chapter: {
+                  include: {
+                    subject: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+        candidateRanks: {
+          where: { rankType: 'OVERALL' },
+          take: 1,
+        },
+        timeAnalyses: { take: 1, orderBy: { createdAt: 'desc' } },
+        strategyAnalyses: { take: 1, orderBy: { createdAt: 'desc' } },
+      },
+    });
+
+    if (!attempt) {
+      throw new NotFoundException(`Attempt '${attemptId}' not found in database.`);
+    }
+
+    if (!attempt.result) {
+      throw new BadRequestException(`Attempt '${attemptId}' does not have calculated results yet.`);
+    }
+
+    let fullAnalysis: any = null;
+    let reviewData: any[] = [];
+    try {
+      fullAnalysis = await this.getFullAnalysis(attemptId);
+      reviewData = await this.getAnswerReview(attemptId);
+    } catch (e: any) {
+      this.logger.warn(`Could not compute fullAnalysis for PDF '${attemptId}': ${e.message}`);
+    }
+
+    const rankData = attempt.candidateRanks[0];
+    const fallbackTimeAnalysis = attempt.timeAnalyses[0];
+    const fallbackStrategyAnalysis = attempt.strategyAnalyses[0];
+
+    const pdfData: ExamReportPdfData = {
+      student: {
+        name: attempt.student?.name || 'Student',
+        studentCode: attempt.student?.studentCode || attempt.student?.studentId || 'N/A',
+        email: attempt.student?.user?.email || 'N/A',
+      },
+      exam: {
+        title: attempt.exam?.title || 'Exam',
+        examDate: attempt.exam?.examDate || attempt.startedAt || attempt.createdAt,
+        totalMarks: attempt.exam?.totalMarks || attempt.result.maxScore,
+        durationMinutes: attempt.exam?.durationMinutes || undefined,
+        examTargetName: fullAnalysis?.examTargetName,
+      },
+      attempt: {
+        id: attempt.id,
+        submittedAt: attempt.submittedAt || attempt.updatedAt,
+        score: attempt.result.totalScore,
+        maxScore: attempt.result.maxScore,
+        percentage: attempt.result.percentage,
+        accuracy: attempt.result.accuracy,
+        totalQuestions: attempt.result.totalQuestions,
+        correctAnswers: attempt.result.correctAnswers,
+        wrongAnswers: attempt.result.wrongAnswers,
+        unattempted: attempt.result.unattempted,
+        timeUsedSeconds: attempt.result.timeUsedSeconds ?? fullAnalysis?.overall?.timeUsedSeconds ?? undefined,
+        formattedTimeUsed: fullAnalysis?.overall?.formattedTimeUsed,
+        averageTimePerQuestion: attempt.result.averageTimePerQuestion ?? fullAnalysis?.overall?.averageTimePerQuestionSeconds ?? undefined,
+        negativeMarksLost: fullAnalysis?.overall?.negativeMarksLost ?? (attempt.result.wrongAnswers * 1),
+        potentialMarks: fullAnalysis?.overall?.potentialMarks,
+        overallStatus: fullAnalysis?.overall?.overallStatus,
+        speedAccuracyQuadrant: fullAnalysis?.overall?.speedAccuracyQuadrant,
+      },
+      rank: rankData
+        ? {
+            rank: rankData.rank,
+            totalCandidates: rankData.totalCandidates,
+            percentile: rankData.percentile ? Number(rankData.percentile) : undefined,
+          }
+        : undefined,
+      subjects: fullAnalysis?.subjects?.items?.length
+        ? fullAnalysis.subjects.items.map((sub: any) => ({
+            name: sub.subjectName || sub.name || 'Subject',
+            score: sub.score,
+            maxScore: sub.maxScore,
+            accuracy: sub.accuracy,
+            percentage: sub.percentage,
+            correct: sub.correct,
+            wrong: sub.wrong,
+            unattempted: sub.unattempted,
+            timeSpentSeconds: sub.timeSpentSeconds,
+            avgTimePerQuestionSeconds: sub.avgTimePerQuestionSeconds,
+            performanceStatus: sub.status,
+            isStrongest: sub.isStrongest,
+            isWeakest: sub.isWeakest,
+          }))
+        : attempt.result.subjectResults?.map((sr) => ({
+            name: sr.subject?.name || 'Subject',
+            score: sr.score,
+            maxScore: sr.maxScore,
+            accuracy: sr.accuracy,
+            correct: sr.correctAnswers,
+            wrong: sr.wrongAnswers,
+            unattempted: sr.unattempted,
+            performanceStatus: sr.performanceStatus || undefined,
+          })),
+      chapters: {
+        mastered: fullAnalysis?.chapters?.mastered?.map((ch: any) => ({
+          name: ch.chapterName || ch.name,
+          subjectName: ch.subjectName,
+          accuracy: ch.accuracy,
+          totalQuestions: ch.totalQuestions,
+          performanceStatus: ch.status,
+        })),
+        revisionNeeded: fullAnalysis?.chapters?.revisionNeeded?.map((ch: any) => ({
+          name: ch.chapterName || ch.name,
+          subjectName: ch.subjectName,
+          accuracy: ch.accuracy,
+          totalQuestions: ch.totalQuestions,
+          performanceStatus: ch.status,
+        })),
+        criticalFocus: fullAnalysis?.chapters?.criticalFocus?.map((ch: any) => ({
+          name: ch.chapterName || ch.name,
+          subjectName: ch.subjectName,
+          accuracy: ch.accuracy,
+          totalQuestions: ch.totalQuestions,
+          performanceStatus: ch.status,
+        })),
+      },
+      timeAnalysis: fullAnalysis?.timeAnalysis
+        ? {
+            totalExamDurationMinutes: fullAnalysis.timeAnalysis.totalExamDurationMinutes,
+            totalTimeUsedSeconds: fullAnalysis.timeAnalysis.totalTimeUsedSeconds,
+            averageTimePerQuestionSeconds: fullAnalysis.timeAnalysis.averageTimePerQuestionSeconds,
+            timeOnCorrectSeconds: fullAnalysis.timeAnalysis.timeOnCorrectQuestionsSeconds,
+            timeOnWrongSeconds: fullAnalysis.timeAnalysis.timeOnWrongQuestionsSeconds,
+            timeOnUnattemptedSeconds: fullAnalysis.timeAnalysis.timeOnUnattemptedQuestionsSeconds,
+            timeWastedSeconds: fullAnalysis.timeAnalysis.timeWastedSeconds,
+            fastestQuestionSeconds: fullAnalysis.timeAnalysis.fastestQuestion?.timeSeconds,
+            slowestQuestionSeconds: fullAnalysis.timeAnalysis.slowestQuestion?.timeSeconds,
+            pacingMetrics: fullAnalysis.timeAnalysis.pacingMetrics,
+          }
+        : fallbackTimeAnalysis
+        ? {
+            averageTimePerQuestionSeconds: (fallbackTimeAnalysis.data as any)?.avgTimePerQuestion,
+            fastestQuestionSeconds: (fallbackTimeAnalysis.data as any)?.fastestQuestionTimeSeconds,
+            slowestQuestionSeconds: (fallbackTimeAnalysis.data as any)?.slowestQuestionTimeSeconds,
+          }
+        : undefined,
+      strategy: fullAnalysis?.attemptStrategy
+        ? {
+            negativeMarkingPenalty: fullAnalysis.attemptStrategy.negativeMarkingPenalty,
+            marksLostToGuessing: fullAnalysis.attemptStrategy.marksLostToGuessing,
+            scoreWithoutNegativeMarking: fullAnalysis.attemptStrategy.scoreWithoutNegativeMarking,
+            attemptRatio: fullAnalysis.attemptStrategy.attemptRatio,
+            accuracyVsSpeedProfile: fullAnalysis.attemptStrategy.accuracyVsSpeedProfile,
+            strategicTakeaways: fullAnalysis.attemptStrategy.strategicTakeaways,
+            potentialScoreGainMessage: fullAnalysis.attemptStrategy.potentialScoreGainMessage,
+          }
+        : fallbackStrategyAnalysis
+        ? {
+            overAttemptingScore: (fallbackStrategyAnalysis.data as any)?.overAttemptCount || 0,
+            avoidableLossMarks: fallbackStrategyAnalysis.avoidableNegativeMarks,
+            riskCategory: fallbackStrategyAnalysis.primaryClassification,
+            recommendations: Array.isArray(fallbackStrategyAnalysis.recommendations)
+              ? (fallbackStrategyAnalysis.recommendations as any[]).map((r: any) => typeof r === 'string' ? r : r.title || r.description || JSON.stringify(r))
+              : [],
+          }
+        : undefined,
+      recommendations: fullAnalysis?.recommendations?.map((rec: any) => ({
+        category: rec.category,
+        priority: rec.priority,
+        title: rec.title,
+        description: rec.description,
+        actionStep: rec.actionStep,
+        impactScore: rec.impactScore,
+      })),
+      questionsReview: reviewData?.map((q: any) => ({
+        displayOrder: q.displayOrder,
+        sectionName: q.sectionName,
+        questionText: q.questionText,
+        isAttempted: q.isAttempted,
+        isCorrect: q.isCorrect,
+        marksAwarded: q.marksAwarded,
+        timeSpentSeconds: q.timeSpentSeconds,
+      })),
+    };
+
+    return await this.pdfService.generateReportPdf(pdfData);
+  }
 }
+

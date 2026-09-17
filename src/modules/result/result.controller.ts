@@ -7,7 +7,9 @@ import {
   Query,
   UseGuards,
   HttpStatus,
+  Res,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { ResultService } from './result.service';
 import { ResultAccessService } from './services/result-access.service';
 import { ResultReadinessService } from './services/result-readiness.service';
@@ -153,6 +155,29 @@ export class ResultController {
     @CurrentUser() user: any,
   ) {
     return this.resultService.getAnswerReview(attemptId, user);
+  }
+
+  /**
+   * Exam Analysis Report PDF Download Endpoint
+   * Returns full 3-page PDF with KPIs, subject, chapter, time, strategy & question audit.
+   * Supports:
+   *  GET /results/:attemptId/pdf
+   *  GET /students/me/results/:attemptId/pdf
+   */
+  @Get(['results/:attemptId/pdf', 'students/me/results/:attemptId/pdf'])
+  async getResultPdf(
+    @Param('attemptId') attemptId: string,
+    @CurrentUser() user: any,
+    @Res() res: any,
+  ) {
+    const pdfBuffer = await this.resultService.generateResultPdf(attemptId, user);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="Exam_Analysis_Report_${attemptId}.pdf"`,
+    );
+    res.setHeader('Content-Length', pdfBuffer.length);
+    res.end(pdfBuffer);
   }
 
   /**
