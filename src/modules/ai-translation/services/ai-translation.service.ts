@@ -48,14 +48,12 @@ export class AiTranslationService {
    * List scheduled exams eligible for AI question paper translation
    */
   async getScheduledExams() {
-    const now = new Date();
     const schedules = await this.prisma.examSchedule.findMany({
       where: {
-        status: { in: ['SCHEDULED', 'ACTIVE', 'RESCHEDULED'] },
-        endTime: { gte: now },
+        status: { in: ['SCHEDULED', 'ACTIVE', 'RESCHEDULED', 'ENDED'] },
         exam: {
           status: {
-            name: { notIn: ['COMPLETED', 'ENDED', 'CANCELLED'] },
+            name: { notIn: ['CANCELLED'] },
           },
         },
       },
@@ -75,13 +73,45 @@ export class AiTranslationService {
           },
         },
       },
-      orderBy: { startTime: 'asc' },
+      orderBy: { startTime: 'desc' },
     });
 
-    // Fetch existing translation jobs for these exams
-    const examIds = schedules.map((s) => s.examId);
-    const jobs = await this.prisma.aiTranslationJob.findMany({
-      where: { examId: { in: examIds } },
+    const scheduledExamIds = schedules.map((s) => s.examId).filter(Boolean);
+
+    // Also fetch all existing translation jobs
+    const allJobs = await this.prisma.aiTranslationJob.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+    const jobExamIds = Array.from(new Set(allJobs.map((j) => j.examId)));
+
+    // Fetch standalone exams that have translation jobs or questions but aren't in the schedules list
+    const standaloneExams = await this.prisma.exam.findMany({
+      where: {
+        id: { notIn: scheduledExamIds },
+        status: {
+          name: { notIn: ['CANCELLED'] },
+        },
+        OR: [
+          { id: { in: jobExamIds } },
+          { examQuestions: { some: {} } },
+        ],
+      },
+      include: {
+        languages: {
+          include: { language: true },
+        },
+        versions: {
+          orderBy: { versionNumber: 'desc' },
+          take: 1,
+        },
+        examQuestions: {
+          select: { id: true },
+        },
+        schedules: {
+          orderBy: { startTime: 'desc' },
+          take: 1,
+        },
+      },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -95,13 +125,13 @@ export class AiTranslationService {
     });
 
     const jobMap = new Map<string, any>();
-    for (const j of jobs) {
+    for (const j of allJobs) {
       if (!jobMap.has(j.examId)) {
         jobMap.set(j.examId, j);
       }
     }
 
-    return schedules
+    const scheduledItems = schedules
       .filter((s) => !!s.exam)
       .map((s) => {
         const latestJob = jobMap.get(s.examId);
@@ -113,7 +143,6 @@ export class AiTranslationService {
             code: l.language!.code || 'en',
           }));
 
-        // Default to all active regional languages from Language Master
         if (targetLanguages.length === 0) {
           targetLanguages = allMasterRegionalLanguages.map((ml) => ({
             id: ml.id,
@@ -126,7 +155,7 @@ export class AiTranslationService {
           scheduleId: s.id,
           examId: s.exam?.id || s.examId,
           examTitle: s.exam?.title || 'Scheduled Exam',
-          examCode: s.exam?.title || 'EXAM',
+          examCode: (s.exam as any)?.code || s.exam?.title || 'EXAM',
           startTime: s.startTime,
           endTime: s.endTime,
           durationMinutes: s.exam?.durationMinutes || 0,
@@ -147,6 +176,56 @@ export class AiTranslationService {
             : null,
         };
       });
+
+    const standaloneItems = standaloneExams.map((e) => {
+      const latestJob = jobMap.get(e.id);
+      let targetLanguages = (e.languages || [])
+        .filter((l) => l.language && (l.language.code || '').toLowerCase() !== 'en' && l.language.isActive)
+        .map((l) => ({
+          id: l.language!.id,
+          name: l.language!.name,
+          code: l.language!.code || 'en',
+        }));
+
+      if (targetLanguages.length === 0) {
+        targetLanguages = allMasterRegionalLanguages.map((ml) => ({
+          id: ml.id,
+          name: ml.name,
+          code: ml.code || 'en',
+        }));
+      }
+
+      const sched = e.schedules?.[0];
+
+      return {
+        scheduleId: sched?.id || e.id,
+        examId: e.id,
+        examTitle: e.title || 'Scheduled Exam',
+        examCode: (e as any)?.code || e.title || 'EXAM',
+        startTime: sched?.startTime || e.createdAt,
+        endTime: sched?.endTime || e.createdAt,
+        durationMinutes: e.durationMinutes || 0,
+        totalQuestionsConfigured: e.totalQuestions || 0,
+        currentQuestionsCount: e.examQuestions?.length || 0,
+        defaultLanguageId: '',
+        targetLanguages,
+        latestVersionId: e.versions?.[0]?.id || null,
+        translationJob: latestJob
+          ? {
+              id: latestJob.id,
+              status: latestJob.status,
+              overallProgress: latestJob.overallProgress,
+              createdAt: latestJob.createdAt,
+              completedAt: latestJob.completedAt,
+              languageStatuses: latestJob.languageStatuses,
+            }
+          : null,
+      };
+    });
+
+    const combined = [...scheduledItems, ...standaloneItems];
+    combined.sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
+    return combined;
   }
 
   /**
@@ -166,7 +245,7 @@ export class AiTranslationService {
       );
     }
 
-    const schedule = await this.prisma.examSchedule.findUnique({
+    let schedule = await this.prisma.examSchedule.findUnique({
       where: { id: examScheduleId },
       include: {
         exam: {
@@ -183,9 +262,25 @@ export class AiTranslationService {
       },
     });
 
-    if (!schedule || !schedule.exam) {
+    let exam = schedule?.exam;
+    if (!exam) {
+      exam = (await this.prisma.exam.findUnique({
+        where: { id: examScheduleId },
+        include: {
+          languages: {
+            include: { language: true },
+          },
+          versions: {
+            orderBy: { versionNumber: 'desc' },
+            take: 1,
+          },
+        },
+      })) as any;
+    }
+
+    if (!exam) {
       throw new NotFoundException(
-        `Exam Schedule with ID '${examScheduleId}' not found.`,
+        `Exam or Exam Schedule with ID '${examScheduleId}' not found.`,
       );
     }
 
@@ -197,7 +292,7 @@ export class AiTranslationService {
       orderBy: { displayOrder: 'asc' },
     });
 
-    let targetLanguages = schedule.exam.languages
+    let targetLanguages = (exam.languages || [])
       .filter((l) => l.language && (l.language.code || '').toLowerCase() !== 'en' && l.language.isActive)
       .map((l) => ({
         id: l.language!.id,
@@ -221,12 +316,12 @@ export class AiTranslationService {
 
     // 2. Validate
     const validationResult = this.validatorService.validate(rawRows, headers, {
-      examScheduleId: schedule.id,
-      examId: schedule.exam.id,
-      examVersionId: schedule.exam.versions[0]?.id || '',
-      examTitle: schedule.exam.title,
-      examCode: schedule.exam.title,
-      totalQuestionsConfigured: schedule.exam.totalQuestions || rawRows.length,
+      examScheduleId: schedule?.id || exam.id,
+      examId: exam.id,
+      examVersionId: exam.versions[0]?.id || '',
+      examTitle: exam.title,
+      examCode: (exam as any).code || exam.title,
+      totalQuestionsConfigured: exam.totalQuestions || rawRows.length,
       targetLanguages,
     });
 
@@ -240,7 +335,7 @@ export class AiTranslationService {
     dto: SubmitAiTranslationDto,
     userId: string,
   ): Promise<{ jobId: string; message: string; totalQuestions: number; totalLanguages: number }> {
-    const schedule = await this.prisma.examSchedule.findUnique({
+    let schedule = await this.prisma.examSchedule.findUnique({
       where: { id: dto.examScheduleId },
       include: {
         exam: {
@@ -258,13 +353,28 @@ export class AiTranslationService {
       },
     });
 
-    if (!schedule || !schedule.exam) {
-      throw new NotFoundException(
-        `Exam Schedule with ID '${dto.examScheduleId}' not found.`,
-      );
+    let exam = schedule?.exam;
+    if (!exam) {
+      exam = (await this.prisma.exam.findUnique({
+        where: { id: dto.examScheduleId },
+        include: {
+          languages: {
+            include: { language: true },
+          },
+          versions: {
+            orderBy: { versionNumber: 'desc' },
+            take: 1,
+          },
+          sections: true,
+        },
+      })) as any;
     }
 
-    const exam = schedule.exam;
+    if (!exam) {
+      throw new NotFoundException(
+        `Exam or Exam Schedule with ID '${dto.examScheduleId}' not found.`,
+      );
+    }
 
     const allMasterRegionalLanguages = await this.prisma.preferredLanguage.findMany({
       where: {

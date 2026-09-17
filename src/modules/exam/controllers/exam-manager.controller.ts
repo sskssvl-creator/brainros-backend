@@ -369,6 +369,21 @@ export class ExamManagerController {
   }
 
   /**
+   * Alias for Question Paper View
+   * GET /admin/exam-manager/question-papers/:examId
+   */
+  @Get('question-papers/:examId')
+  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER', 'OPERATOR')
+  async getQuestionPaperDetail(@Param('examId') examId: string) {
+    const data = await this.examPaperImportService.getExamQuestionPaper(examId);
+    return {
+      statusCode: 200,
+      message: 'Question paper retrieved successfully.',
+      data,
+    };
+  }
+
+  /**
    * Retry failed question paper upload
    * POST /admin/exam-manager/exams/:examId/retry-upload
    */

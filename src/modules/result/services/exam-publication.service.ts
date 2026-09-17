@@ -71,7 +71,21 @@ export class ExamPublicationService {
 
     if (query?.status && query.status !== 'ALL') {
       if (query.status === 'PUBLISHED') {
-        where.resultPublications = { some: {} };
+        where.resultPublications = {
+          some: {
+            OR: [
+              { status: ExamPublicationStatusEnum.PUBLISHED },
+              { publishedAt: { not: null } },
+            ],
+          },
+        };
+      } else if (query.status === 'READY_TO_PUBLISH') {
+        where.resultPublications = {
+          some: {
+            status: ExamPublicationStatusEnum.READY_TO_PUBLISH,
+            publishedAt: null,
+          },
+        };
       }
     }
 
@@ -197,7 +211,11 @@ export class ExamPublicationService {
       const securityReviewCompleted = pendingSecurity === 0;
 
       const latestPub = exam.resultPublications?.[0];
-      const isPublished = Boolean(latestPub);
+      const isPublished = Boolean(
+        latestPub &&
+          (latestPub.status === ExamPublicationStatusEnum.PUBLISHED ||
+            latestPub.publishedAt),
+      );
 
       // Determine readiness
       let isReadyToPublish = false;
@@ -208,10 +226,11 @@ export class ExamPublicationService {
       if (isPublished) {
         publicationStatus = 'PUBLISHED';
       } else if (
-        totalEligible > 0 &&
-        finalized === totalEligible &&
-        evaluated === finalized &&
-        securityReviewCompleted
+        latestPub?.status === ExamPublicationStatusEnum.READY_TO_PUBLISH ||
+        (totalEligible > 0 &&
+          finalized === totalEligible &&
+          evaluated === finalized &&
+          securityReviewCompleted)
       ) {
         isReadyToPublish = true;
         publicationStatus = 'READY_TO_PUBLISH';
@@ -349,8 +368,8 @@ export class ExamPublicationService {
       const readiness = await this.readinessService.checkExamReadiness(examId);
 
       if (readiness.publicationStatus === ExamPublicationStatusEnum.PUBLISHED) {
-        throw new ConflictException(
-          'Official results for this exam have already been published.',
+        this.logger.log(
+          `[PublishExamResults] Official results for exam '${examId}' are already published. Re-publishing latest updated results...`,
         );
       }
 

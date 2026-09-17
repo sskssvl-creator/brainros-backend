@@ -33,6 +33,9 @@ export class JobProgressController {
     const isAdmin =
       roles.includes('ADMIN') ||
       roles.includes('SUPER_ADMIN') ||
+      roles.includes('GENERAL_MANAGER') ||
+      roles.includes('MANAGER') ||
+      roles.includes('OPERATOR') ||
       roles.includes('INSTITUTION_ADMIN');
 
     const jobUserId = status.job?.userId;

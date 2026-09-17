@@ -56,26 +56,7 @@ export class CompletedExamReportsService {
    */
   async getCompletedLiveExams() {
     const exams = await this.prisma.exam.findMany({
-      where: {
-        AND: [
-          {
-            NOT: {
-              title: {
-                contains: 'Mock',
-                mode: 'insensitive',
-              },
-            },
-          },
-          {
-            NOT: {
-              title: {
-                contains: 'Practice',
-                mode: 'insensitive',
-              },
-            },
-          },
-        ],
-      },
+      where: {},
       include: {
         status: true,
         examTarget: { select: { id: true, name: true } },
@@ -100,8 +81,6 @@ export class CompletedExamReportsService {
 
     // Filter to exams that are live and whose window has ended or are completed / published
     const completedLiveExams = exams.filter((exam: any) => {
-      if (!this.isLiveExamTitle(exam.title)) return false;
-
       const schedule = exam.schedules?.[0];
       const pub = exam.resultPublications?.[0];
 
@@ -164,9 +143,7 @@ export class CompletedExamReportsService {
       throw new NotFoundException(`Exam with ID '${examId}' not found.`);
     }
 
-    if (!this.isLiveExamTitle(exam.title)) {
-      throw new BadRequestException('The requested exam is a Mock Test, which is not permitted in this dashboard.');
-    }
+    // Removed Mock Test check to allow mock tests in the dashboard
 
     // 1. Registered Count: Students with exam target or enrollments
     const registeredCount = await this.prisma.student.count({
@@ -979,9 +956,7 @@ export class CompletedExamReportsService {
       throw new NotFoundException(`Exam with ID '${examId}' not found.`);
     }
 
-    if (!this.isLiveExamTitle(exam.title)) {
-      throw new BadRequestException('The requested exam is a Mock Test, which is not permitted in this dashboard.');
-    }
+    // Removed Mock Test check to allow mock tests in the dashboard
 
     // Find all evaluated attempts for this exam with valid student emails
     const attempts = await this.prisma.attempt.findMany({

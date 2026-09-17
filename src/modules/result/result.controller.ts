@@ -9,7 +9,7 @@ import {
   HttpStatus,
   Res,
 } from '@nestjs/common';
-import type { Response } from 'express';
+import { Response } from 'express';
 import { ResultService } from './result.service';
 import { ResultAccessService } from './services/result-access.service';
 import { ResultReadinessService } from './services/result-readiness.service';
@@ -109,25 +109,6 @@ export class ResultController {
     return this.resultService.getFullAnalysis(attemptId, user);
   }
 
-  /**
-   * Direct Download of Complete PDF Performance Analysis Report
-   * Supports:
-   *  GET /results/:attemptId/pdf
-   *  GET /students/me/results/:attemptId/pdf
-   */
-  @Get(['results/:attemptId/pdf', 'students/me/results/:attemptId/pdf'])
-  async downloadAnalysisPdf(
-    @Param('attemptId') attemptId: string,
-    @CurrentUser() user: any,
-    @Res() res: Response,
-  ) {
-    const { buffer, filename } = await this.resultService.generateAnalysisReportPdf(attemptId, user);
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Length', buffer.length.toString());
-    res.send(buffer);
-  }
-
   @Get('results/:attemptId/subjects')
   getSubjectResults(
     @Param('attemptId') attemptId: string,
@@ -174,6 +155,49 @@ export class ResultController {
     @CurrentUser() user: any,
   ) {
     return this.resultService.getAnswerReview(attemptId, user);
+  }
+
+  /**
+   * Exam Analysis Report PDF Download Endpoint
+   * Returns full 3-page PDF with KPIs, subject, chapter, time, strategy & question audit.
+   * Supports:
+   *  GET /results/:attemptId/pdf
+   *  GET /students/me/results/:attemptId/pdf
+   */
+  @Get(['results/:attemptId/pdf', 'students/me/results/:attemptId/pdf'])
+  async getResultPdf(
+    @Param('attemptId') attemptId: string,
+    @CurrentUser() user: any,
+    @Res() res: any,
+  ) {
+    const pdfBuffer = await this.resultService.generateResultPdf(attemptId, user);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="Exam_Analysis_Report_${attemptId}.pdf"`,
+    );
+    res.setHeader('Content-Length', pdfBuffer.length);
+    res.end(pdfBuffer);
+  }
+
+  /**
+   * Exam Analysis Report Email Dispatch Endpoint
+   * Sends comprehensive PDF report with all details directly to the student's registered email.
+   * Supports:
+   *  POST /results/:attemptId/send-email
+   *  POST /students/me/results/:attemptId/send-email
+   *  POST /admin/attempts/:attemptId/send-report
+   */
+  @Post([
+    'results/:attemptId/send-email',
+    'students/me/results/:attemptId/send-email',
+    'admin/attempts/:attemptId/send-report',
+  ])
+  async sendResultEmail(
+    @Param('attemptId') attemptId: string,
+    @CurrentUser() user: any,
+  ) {
+    return this.resultService.sendReportEmail(attemptId, user);
   }
 
   /**
