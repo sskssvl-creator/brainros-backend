@@ -19,9 +19,15 @@ export class StudentDashboardController {
    * Single aggregated dashboard response containing next exam, resume card, performance, ranks, trends, and weak areas
    */
   @Get('dashboard')
-  getDashboard(@CurrentUser() user: any) {
+  getDashboard(
+    @CurrentUser() user: any,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
     const userId = user.userId || user.id || user.sub;
-    return this.dashboardService.getStudentDashboard(userId);
+    const pageNum = page ? parseInt(page, 10) : 1;
+    const limitNum = limit ? parseInt(limit, 10) : 5;
+    return this.dashboardService.getStudentDashboard(userId, pageNum, limitNum);
   }
 
   /**

@@ -27,7 +27,7 @@ export class ExamPublicationController {
    * GET /admin/exams/results/publication-dashboard
    */
   @Get('admin/exams/results/publication-dashboard')
-  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER', 'OPERATOR')
+  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER', 'OPERATOR', 'STUDENT')
   async getPublicationDashboard(
     @Query('page') page?: string,
     @Query('limit') limit?: string,

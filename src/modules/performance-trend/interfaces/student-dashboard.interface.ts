@@ -174,6 +174,14 @@ export interface StudentDashboardResponse {
   recommendations: DashboardRecommendationItem[];
   timeManagement: TimeManagementWidget | null;
   attemptStrategy: AttemptStrategyWidget | null;
-  recentResults: RecentResultItem[];
+  recentResults: {
+    data: RecentResultItem[];
+    meta: {
+      total: number;
+      page: number;
+      limit: number;
+      totalPages: number;
+    };
+  };
   unreadNotificationCount: number;
 }

@@ -34,8 +34,8 @@ export class StudentDashboardService {
   /**
    * Aggregate complete Student Dashboard data in an optimized single entry point
    */
-  async getStudentDashboard(userId: string): Promise<StudentDashboardResponse> {
-    const cacheKey = `student:${userId}:dashboard`;
+  async getStudentDashboard(userId: string, page: number = 1, limit: number = 5): Promise<StudentDashboardResponse> {
+    const cacheKey = `student:${userId}:dashboard:page:${page}:limit:${limit}`;
     try {
       const cached = await this.redis.get(cacheKey);
       if (cached) {
@@ -519,14 +519,17 @@ export class StudentDashboardService {
       };
     });
 
-    // 13. Recent Results Table (Latest 5 completed)
-    const recentResults: RecentResultItem[] = [];
-    const reversedEvaluated = [...evaluatedAttempts].reverse().slice(0, 5);
+    // 13. Recent Results Table (Paginated)
+    const recentResultsData: RecentResultItem[] = [];
+    const reversedEvaluated = [...evaluatedAttempts].reverse();
+    const totalCompleted = reversedEvaluated.length;
+    const startIndex = (page - 1) * limit;
+    const paginatedEvaluated = reversedEvaluated.slice(startIndex, startIndex + limit);
 
-    reversedEvaluated.forEach((att) => {
+    paginatedEvaluated.forEach((att) => {
       const res = att.result;
       const rankRecord = att.candidateRanks?.find((r) => r.rankType === 'OVERALL') || att.candidateRanks?.[0];
-      recentResults.push({
+      recentResultsData.push({
         attemptId: att.id,
         examId: att.exam.id,
         examTitle: att.exam.title,
@@ -543,6 +546,16 @@ export class StudentDashboardService {
         percentile: rankRecord ? rankRecord.percentile : null,
       });
     });
+
+    const recentResults = {
+      data: recentResultsData,
+      meta: {
+        total: totalCompleted,
+        page,
+        limit,
+        totalPages: Math.ceil(totalCompleted / limit),
+      },
+    };
 
     // 14. Unread Notification Count
     const unreadCount = await this.prisma.notification.count({

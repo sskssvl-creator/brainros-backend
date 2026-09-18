@@ -24,14 +24,18 @@ export class PublicExamController {
 
     const staticUrls = [
       { loc: `${baseDomain}/`, priority: '1.0', changefreq: 'daily' },
+      { loc: `${baseDomain}/about`, priority: '0.8', changefreq: 'monthly' },
+      { loc: `${baseDomain}/features`, priority: '0.9', changefreq: 'weekly' },
+      { loc: `${baseDomain}/services`, priority: '0.9', changefreq: 'weekly' },
       { loc: `${baseDomain}/exams`, priority: '0.9', changefreq: 'daily' },
       { loc: `${baseDomain}/exams/neet`, priority: '0.9', changefreq: 'weekly' },
       { loc: `${baseDomain}/exams/jee`, priority: '0.9', changefreq: 'weekly' },
       { loc: `${baseDomain}/exams/cet`, priority: '0.8', changefreq: 'weekly' },
-      { loc: `${baseDomain}/about`, priority: '0.7', changefreq: 'monthly' },
-      { loc: `${baseDomain}/contact`, priority: '0.6', changefreq: 'monthly' },
+      { loc: `${baseDomain}/contact`, priority: '0.7', changefreq: 'monthly' },
+      { loc: `${baseDomain}/privacy-policy`, priority: '0.5', changefreq: 'monthly' },
+      { loc: `${baseDomain}/terms`, priority: '0.5', changefreq: 'monthly' },
       { loc: `${baseDomain}/login`, priority: '0.5', changefreq: 'monthly' },
-      { loc: `${baseDomain}/register`, priority: '0.5', changefreq: 'monthly' },
+      { loc: `${baseDomain}/register`, priority: '0.6', changefreq: 'monthly' },
     ];
 
     const dynamicExamUrls = exams.map((ex: any) => ({
