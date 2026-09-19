@@ -115,27 +115,35 @@ export async function seedInstitutions(ctx: SeedContext): Promise<SeederResult> 
     // Link Institution Admin
     const adminUser = ctx.users.get(instData.adminEmail);
     if (adminUser) {
-      await prisma.institutionAdmin.upsert({
-        where: {
-          institutionId_userId: { institutionId: institution.id, userId: adminUser.id },
-        },
-        update: { isActive: true },
-        create: {
-          institutionId: institution.id,
-          userId: adminUser.id,
-          role: 'ADMIN',
-          isActive: true,
-        },
+      const existingAdmin = await prisma.institutionAdmin.findFirst({
+        where: { institutionId: institution.id, userId: adminUser.id },
       });
-      inc('institution_admins', true);
+      if (existingAdmin) {
+        await prisma.institutionAdmin.update({
+          where: { id: existingAdmin.id },
+          data: { isActive: true },
+        });
+        inc('institution_admins', false);
+      } else {
+        await prisma.institutionAdmin.create({
+          data: {
+            institutionId: institution.id,
+            userId: adminUser.id,
+            role: 'ADMIN',
+            isActive: true,
+          },
+        });
+        inc('institution_admins', true);
+      }
     }
 
     // Create Batches
     for (const bData of instData.batches) {
       const targetObj = ctx.examTargets.get(bData.target) || ctx.examTargets.get('NEET');
-      let batch = await prisma.institutionBatch.findUnique({
+      let batch = await prisma.institutionBatch.findFirst({
         where: {
-          institutionId_name: { institutionId: institution.id, name: bData.name },
+          institutionId: institution.id,
+          name: bData.name,
         },
       });
 
@@ -163,19 +171,26 @@ export async function seedInstitutions(ctx: SeedContext): Promise<SeederResult> 
       for (let i = 0; i < 5; i++) {
         if (studentAllocationIdx < studentList.length) {
           const student = studentList[studentAllocationIdx++];
-          await prisma.batchStudent.upsert({
-            where: {
-              batchId_studentId: { batchId: batch.id, studentId: student.id },
-            },
-            update: { status: BatchStudentStatus.ACTIVE },
-            create: {
-              batchId: batch.id,
-              studentId: student.id,
-              status: BatchStudentStatus.ACTIVE,
-              joinedAt: new Date('2026-04-15'),
-            },
+          const existingBs = await prisma.batchStudent.findFirst({
+            where: { batchId: batch.id, studentId: student.id },
           });
-          inc('batch_students', true);
+          if (existingBs) {
+            await prisma.batchStudent.update({
+              where: { id: existingBs.id },
+              data: { status: BatchStudentStatus.ACTIVE },
+            });
+            inc('batch_students', false);
+          } else {
+            await prisma.batchStudent.create({
+              data: {
+                batchId: batch.id,
+                studentId: student.id,
+                status: BatchStudentStatus.ACTIVE,
+                joinedAt: new Date('2026-04-15'),
+              },
+            });
+            inc('batch_students', true);
+          }
         }
       }
 

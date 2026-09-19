@@ -11,7 +11,7 @@
     "start": "node dist/main.js",
     "start:dev": "npx nest start --watch",
     "start:debug": "npx nest start --debug --watch",
-    "start:prod": "node dist/main.js",
+    "start:prod": "node --env-file=.env.production dist/main.js",
     "lint": "npx eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "npx jest",
     "test:watch": "npx jest --watch",
@@ -21,11 +21,13 @@
     "seed": "npx ts-node prisma/seed.ts",
     "seed:verify": "npx ts-node prisma/verify-seed.ts",
     "seed:startup": "npx ts-node prisma/seed-startup.ts",
+    "seed:prod": "node --env-file=.env.production -r ts-node/register prisma/seed.ts",
     "diagnose": "node scripts/diagnostics/run-all.js",
     "tunnel": "node scripts/tunnel.js",
     "prisma:generate": "npx prisma generate",
     "prisma:migrate:deploy": "npx prisma migrate deploy",
-    "prisma:migrate:status": "npx prisma migrate status"
+    "prisma:migrate:status": "npx prisma migrate status",
+    "prisma:migrate:prod": "npx dotenv-cli -e .env.production -- npx prisma migrate deploy"
   },
   "engines": {
     "node": ">=18.0.0"

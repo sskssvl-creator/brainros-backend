@@ -42,7 +42,7 @@ export class ResultAccessService {
     const userId = user?.userId || user?.id || user?.sub;
     const userRole = (user?.role || user?.roles?.[0] || 'STUDENT').toUpperCase();
 
-    const attempt = await this.prisma.attempt.findUnique({
+    const attempt: any = await this.prisma.attempt.findUnique({
       where: { id: attemptId },
       include: {
         student: {

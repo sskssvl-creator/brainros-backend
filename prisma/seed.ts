@@ -17,8 +17,8 @@ async function main() {
   console.log('🚀 BRAINROS EXAM MANAGEMENT SYSTEM — DETERMINISTIC SEED PIPELINE');
   console.log('════════════════════════════════════════════════════════════════\n');
 
-  if (process.env.NODE_ENV === 'production') {
-    console.error('❌ SAFETY ABORT: Seeding is disabled in production environment.');
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_PRODUCTION_SEED !== 'true') {
+    console.error('❌ SAFETY ABORT: Seeding is disabled in production environment. To allow, run with ALLOW_PRODUCTION_SEED=true');
     process.exit(1);
   }
 

@@ -25,7 +25,7 @@ export class ResultReadinessService {
    * Mock and practice tests are always evaluated immediately and auto-published.
    */
   async isLiveExam(examId: string): Promise<boolean> {
-    const exam = await this.prisma.exam.findUnique({
+    const exam: any = await this.prisma.exam.findUnique({
       where: { id: examId },
       include: {
         schedules: {
@@ -72,7 +72,7 @@ export class ResultReadinessService {
     examId: string,
     requireAllSecurityReviews = true,
   ): Promise<ResultReadinessResponse> {
-    const exam = await this.prisma.exam.findUnique({
+    const exam: any = await this.prisma.exam.findUnique({
       where: { id: examId },
       include: {
         status: true,

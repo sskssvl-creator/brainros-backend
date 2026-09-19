@@ -137,7 +137,7 @@ export class StudentDashboardService {
     );
 
     // 3. Fetch Upcoming / Live Exams for Student's Target
-    const upcomingExamRecords = await this.prisma.exam.findMany({
+    const upcomingExamRecords: any[] = await this.prisma.exam.findMany({
       where: {
         status: { name: { in: ['SCHEDULED', 'ACTIVE'] } },
         ...(targetIds.length > 0

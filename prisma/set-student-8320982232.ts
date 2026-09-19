@@ -1,12 +1,18 @@
 import { PrismaClient, UserStatus } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
 
 async function main() {
   const phone = '+918320982232';
   const rawMobile = '8320982232';
+  const email = 'student.8320982232@brainros.test';
+  const password = 'Password@123';
+  const passwordHash = await bcrypt.hash(password, 10);
 
-  console.log(`Configuring mobile ${phone} as STUDENT role...`);
+  console.log(`\n════════════════════════════════════════════════════════════════`);
+  console.log(`🔧 SEEDING STUDENT USER: ${rawMobile} (Target: JEE)`);
+  console.log(`════════════════════════════════════════════════════════════════\n`);
 
   // 1. Ensure STUDENT role exists
   const studentRole = await prisma.role.upsert({
@@ -15,7 +21,7 @@ async function main() {
     create: { name: 'STUDENT', description: 'Enrolled Examination Candidate' },
   });
 
-  // 2. Find user
+  // 2. Find or Create User
   let user = await prisma.user.findFirst({
     where: {
       OR: [
@@ -23,6 +29,7 @@ async function main() {
         { mobileNumber: phone },
         { phone: rawMobile },
         { mobileNumber: rawMobile },
+        { email },
       ],
     },
   });
@@ -32,8 +39,8 @@ async function main() {
       data: {
         phone,
         mobileNumber: phone,
-        email: 'student.8320982232@brainros.test',
-        passwordHash: '',
+        email,
+        passwordHash,
         status: UserStatus.ACTIVE,
         isActive: true,
         isVerified: true,
@@ -41,10 +48,24 @@ async function main() {
         mobileVerifiedAt: new Date(),
       },
     });
-    console.log(`Created user ID: ${user.id}`);
+    console.log(`✓ Created User record: ${user.id} (${phone})`);
+  } else {
+    user = await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        phone,
+        mobileNumber: phone,
+        passwordHash,
+        status: UserStatus.ACTIVE,
+        isActive: true,
+        isVerified: true,
+        mobileVerifiedAt: user.mobileVerifiedAt || new Date(),
+      },
+    });
+    console.log(`✓ Updated User record: ${user.id} (${phone})`);
   }
 
-  // 3. Clear admin roles and assign ONLY STUDENT role
+  // 3. Assign STUDENT role
   await prisma.userRole.deleteMany({
     where: { userId: user.id },
   });
@@ -55,82 +76,152 @@ async function main() {
       roleId: studentRole.id,
     },
   });
+  console.log(`✓ Assigned role 'STUDENT' to user`);
 
-  console.log(`Assigned role STUDENT to user ID: ${user.id}`);
+  // 4. Ensure master records for JEE Exam Target, Class, Language
+  let jeeTarget = await prisma.examTarget.findFirst({
+    where: {
+      OR: [
+        { name: 'JEE' },
+        { name: 'JEE_MAIN' },
+        { name: 'JEE (Main & Advanced)' },
+        { name: { contains: 'JEE', mode: 'insensitive' } },
+      ],
+    },
+  });
 
-  // 4. Ensure master records for Student Profile
-  const defaultClass = (await prisma.studentClass.findFirst()) || (await prisma.studentClass.create({
-    data: { name: 'Class 12' },
-  }));
+  if (!jeeTarget) {
+    jeeTarget = await prisma.examTarget.create({
+      data: {
+        name: 'JEE',
+        description: 'Joint Entrance Examination (Engineering)',
+      },
+    });
+  }
+  console.log(`✓ Using Target Exam: ${jeeTarget.name} (${jeeTarget.id})`);
 
-  const defaultExamTarget = (await prisma.examTarget.findFirst()) || (await prisma.examTarget.create({
-    data: { name: 'NEET' },
-  }));
+  let targetClass = await prisma.studentClass.findFirst({
+    where: {
+      OR: [
+        { name: 'Class 12' },
+        { name: 'CLASS_12' },
+        { name: { contains: '12' } },
+      ],
+    },
+  });
 
-  const defaultLanguage = (await prisma.preferredLanguage.findFirst()) || (await prisma.preferredLanguage.create({
-    data: { name: 'English', code: 'EN' },
-  }));
+  if (!targetClass) {
+    targetClass = (await prisma.studentClass.findFirst()) || (await prisma.studentClass.create({
+      data: { name: 'Class 12' },
+    }));
+  }
 
-  // 5. Ensure Student record exists and is active
+  let preferredLang = await prisma.preferredLanguage.findFirst({
+    where: {
+      OR: [{ code: 'en' }, { code: 'EN' }, { name: 'English' }],
+    },
+  });
+
+  if (!preferredLang) {
+    preferredLang = (await prisma.preferredLanguage.findFirst()) || (await prisma.preferredLanguage.create({
+      data: { name: 'English', code: 'en' },
+    }));
+  }
+
+  // 5. Ensure Student Profile exists and links to JEE
   const existingStudent = await prisma.student.findUnique({
     where: { userId: user.id },
   });
 
+  let studentRecord;
   if (existingStudent) {
-    await prisma.student.update({
+    studentRecord = await prisma.student.update({
       where: { id: existingStudent.id },
       data: {
-        name: 'Student 8320982232',
+        name: 'JEE Aspirant (8320982232)',
         status: 'ACTIVE',
-        classId: defaultClass.id,
-        examTargetId: defaultExamTarget.id,
-        preferredLanguageId: defaultLanguage.id,
+        classId: targetClass.id,
+        examTargetId: jeeTarget.id,
+        preferredLanguageId: preferredLang.id,
+        state: 'Gujarat',
+        district: 'Ahmedabad',
+        schoolCollege: 'Brainros JEE Academy',
       },
     });
-    console.log(`Updated Student Profile: ${existingStudent.studentCode} (${existingStudent.studentId})`);
+    console.log(`✓ Updated Student Profile: Code=${studentRecord.studentCode}, ID=${studentRecord.studentId}`);
   } else {
-    const studentCount = await prisma.student.count();
-    const studentIdStr = `STU${String(studentCount + 1000).padStart(6, '0')}`;
-    const studentCode = `BRN-2026-${String(studentCount + 1).padStart(6, '0')}`;
+    const studentIdStr = 'STU8320982232';
+    const studentCode = 'BRN-2026-832098';
 
-    const newStudent = await prisma.student.create({
+    studentRecord = await prisma.student.create({
       data: {
         userId: user.id,
         studentId: studentIdStr,
         studentCode,
-        name: 'Student 8320982232',
+        name: 'JEE Aspirant (8320982232)',
         state: 'Gujarat',
         district: 'Ahmedabad',
-        schoolCollege: 'Brainros Test Academy',
-        classId: defaultClass.id,
-        examTargetId: defaultExamTarget.id,
-        preferredLanguageId: defaultLanguage.id,
+        schoolCollege: 'Brainros JEE Academy',
+        classId: targetClass.id,
+        examTargetId: jeeTarget.id,
+        preferredLanguageId: preferredLang.id,
         status: 'ACTIVE',
       },
     });
-    console.log(`Created Student Profile: ${newStudent.studentCode} (${newStudent.studentId})`);
+    console.log(`✓ Created Student Profile: Code=${studentRecord.studentCode}, ID=${studentRecord.studentId}`);
   }
 
-  // 6. Verify configuration
-  const verifyUser = await prisma.user.findUnique({
-    where: { id: user.id },
-    include: {
-      userRoles: { include: { role: true } },
-      student: true,
+  // 6. Link in student_exam_targets table if it exists
+  const existingSet = await prisma.studentExamTarget.findFirst({
+    where: {
+      studentId: studentRecord.id,
+      examTargetId: jeeTarget.id,
     },
   });
 
-  console.log(`\n✅ Successfully configured 8320982232 as STUDENT:`);
-  console.log(`- Mobile: ${verifyUser?.mobileNumber || verifyUser?.phone}`);
-  console.log(`- Roles: ${verifyUser?.userRoles.map((ur) => ur.role.name).join(', ')}`);
-  console.log(`- Student Name: ${verifyUser?.student?.name}`);
-  console.log(`- Student Code: ${verifyUser?.student?.studentCode}`);
-  console.log(`- Student ID: ${verifyUser?.student?.studentId}`);
+  if (!existingSet) {
+    await prisma.studentExamTarget.create({
+      data: {
+        studentId: studentRecord.id,
+        examTargetId: jeeTarget.id,
+        isPrimary: true,
+      },
+    });
+    console.log(`✓ Linked StudentExamTarget mapping`);
+  }
+
+  // 7. Verify all details
+  const verifiedUser = await prisma.user.findUnique({
+    where: { id: user.id },
+    include: {
+      userRoles: { include: { role: true } },
+      student: {
+        include: {
+          examTarget: true,
+          studentClass: true,
+          preferredLanguage: true,
+        },
+      },
+    },
+  });
+
+  console.log(`\n════════════════════════════════════════════════════════════════`);
+  console.log(`🎉 STUDENT USER READY FOR LOGIN`);
+  console.log(`════════════════════════════════════════════════════════════════`);
+  console.log(`- Mobile / Login Number: 8320982232 (or +918320982232)`);
+  console.log(`- Email: ${verifiedUser?.email}`);
+  console.log(`- Password: Password@123 (or via OTP)`);
+  console.log(`- Role: ${verifiedUser?.userRoles.map((ur) => ur.role.name).join(', ')}`);
+  console.log(`- Student Name: ${verifiedUser?.student?.name}`);
+  console.log(`- Target Exam: ${verifiedUser?.student?.examTarget?.name}`);
+  console.log(`- Class: ${verifiedUser?.student?.studentClass?.name}`);
+  console.log(`- Student Code: ${verifiedUser?.student?.studentCode}`);
+  console.log(`════════════════════════════════════════════════════════════════\n`);
 }
 
 main()
   .catch((e) => {
-    console.error(e);
+    console.error('❌ Error seeding student user:', e);
     process.exit(1);
   })
   .finally(async () => {

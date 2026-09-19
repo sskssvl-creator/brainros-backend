@@ -136,133 +136,167 @@ export async function seedResultsAndAnalytics(ctx: SeedContext): Promise<SeederR
         ? (sStat.correct / (sStat.correct + sStat.wrong)) * 100
         : 0;
 
-      await prisma.subjectResult.upsert({
-        where: { resultId_subjectId: { resultId: result.id, subjectId: sId } },
-        update: {
-          totalQuestions: sStat.total,
-          correctAnswers: sStat.correct,
-          wrongAnswers: sStat.wrong,
-          unattempted: sStat.total - (sStat.correct + sStat.wrong),
-          score: sStat.score,
-          maxScore: sMaxScore,
-          accuracy: sAcc,
-          percentage: (sStat.score / sMaxScore) * 100,
-        },
-        create: {
-          resultId: result.id,
-          subjectId: sId,
-          totalQuestions: sStat.total,
-          correctAnswers: sStat.correct,
-          wrongAnswers: sStat.wrong,
-          unattempted: sStat.total - (sStat.correct + sStat.wrong),
-          score: sStat.score,
-          maxScore: sMaxScore,
-          accuracy: sAcc,
-          percentage: (sStat.score / sMaxScore) * 100,
-          performanceStatus: sAcc >= 80 ? 'EXCELLENT' : sAcc >= 50 ? 'AVERAGE' : 'NEEDS_IMPROVEMENT',
-        },
+      const existingSr = await prisma.subjectResult.findFirst({
+        where: { resultId: result.id, subjectId: sId },
       });
-      inc('subject_results', true);
+      if (existingSr) {
+        await prisma.subjectResult.update({
+          where: { id: existingSr.id },
+          data: {
+            totalQuestions: sStat.total,
+            correctAnswers: sStat.correct,
+            wrongAnswers: sStat.wrong,
+            unattempted: sStat.total - (sStat.correct + sStat.wrong),
+            score: sStat.score,
+            maxScore: sMaxScore,
+            accuracy: sAcc,
+            percentage: (sStat.score / sMaxScore) * 100,
+          },
+        });
+        inc('subject_results', false);
+      } else {
+        await prisma.subjectResult.create({
+          data: {
+            resultId: result.id,
+            subjectId: sId,
+            totalQuestions: sStat.total,
+            correctAnswers: sStat.correct,
+            wrongAnswers: sStat.wrong,
+            unattempted: sStat.total - (sStat.correct + sStat.wrong),
+            score: sStat.score,
+            maxScore: sMaxScore,
+            accuracy: sAcc,
+            percentage: (sStat.score / sMaxScore) * 100,
+            performanceStatus: sAcc >= 80 ? 'EXCELLENT' : sAcc >= 50 ? 'AVERAGE' : 'NEEDS_IMPROVEMENT',
+          },
+        });
+        inc('subject_results', true);
+      }
     }
 
-    // 3. Persist Time Analysis (Upsert)
-    await prisma.timeAnalysis.upsert({
-      where: { attemptId_analysisVersion: { attemptId: att.id, analysisVersion: 1 } },
-      update: {
-        totalTimeAvailableSeconds: 3600,
-        totalTimeUsedSeconds: totalTimeUsed,
-        timeRemainingSeconds: Math.max(0, 3600 - totalTimeUsed),
-        timeUtilizationPercentage: (totalTimeUsed / 3600) * 100,
-        averageTimePerQuestionSeconds: totalTimeUsed / (examQuestions.length || 1),
-        averageTimePerAttemptedQuestion: totalTimeUsed / (totalAnswered || 1),
-      },
-      create: {
-        attemptId: att.id,
-        analysisVersion: 1,
-        algorithmVersion: 'v1.0.0',
-        totalTimeAvailableSeconds: 3600,
-        totalTimeUsedSeconds: totalTimeUsed,
-        timeRemainingSeconds: Math.max(0, 3600 - totalTimeUsed),
-        timeUtilizationPercentage: (totalTimeUsed / 3600) * 100,
-        averageTimePerQuestionSeconds: totalTimeUsed / (examQuestions.length || 1),
-        averageTimePerAttemptedQuestion: totalTimeUsed / (totalAnswered || 1),
-        medianTimePerQuestionSeconds: 65,
-        timeWastedSeconds: wrongCount * 45,
+    // 3. Persist Time Analysis
+    const existingTa = await prisma.timeAnalysis.findFirst({
+      where: { attemptId: att.id, analysisVersion: 1 },
+    });
+    if (existingTa) {
+      await prisma.timeAnalysis.update({
+        where: { id: existingTa.id },
         data: {
-          paceClassification: totalTimeUsed < 2800 ? 'FAST' : 'BALANCED',
-          rushEndPercentage: 5.2,
+          totalTimeAvailableSeconds: 3600,
+          totalTimeUsedSeconds: totalTimeUsed,
+          timeRemainingSeconds: Math.max(0, 3600 - totalTimeUsed),
+          timeUtilizationPercentage: (totalTimeUsed / 3600) * 100,
+          averageTimePerQuestionSeconds: totalTimeUsed / (examQuestions.length || 1),
+          averageTimePerAttemptedQuestion: totalTimeUsed / (totalAnswered || 1),
         },
-      },
-    });
-    inc('time_analyses', true);
-
-    // 4. Persist Strategy Analysis (Upsert)
-    const isAggressive = wrongCount > 4;
-    await prisma.strategyAnalysis.upsert({
-      where: { attemptId_strategyVersion: { attemptId: att.id, strategyVersion: 1 } },
-      update: {
-        projectedScore: totalScore + wrongCount * 1.5,
-        avoidableNegativeMarks: wrongCount * 1.0,
-      },
-      create: {
-        attemptId: att.id,
-        strategyVersion: 1,
-        algorithmVersion: 'v1.0.0',
-        primaryClassification: isAggressive ? 'HIGH_RISK_AGGRESSIVE' : 'BALANCED',
-        classifications: isAggressive ? ['HIGH_RISK', 'TIME_OVERUSE'] : ['BALANCED', 'CONSISTENT'],
-        metrics: {
-          coveragePercentage: (totalAnswered / examQuestions.length) * 100,
-          riskFactor: wrongCount / (examQuestions.length || 1),
-        },
-        recommendations: [
-          {
-            type: 'NEGATIVE_MARKS',
-            message: `Eliminate speculative guesswork to save ${wrongCount} negative marks.`,
-          },
-        ],
-        projectedImprovementMarks: wrongCount * 2.5,
-        projectedScore: totalScore + wrongCount * 1.5,
-        avoidableNegativeMarks: wrongCount * 1.0,
-        data: { generatedAt: new Date() },
-      },
-    });
-    inc('strategy_analyses', true);
-
-    // 5. Predicted Rank (Upsert)
-    const predictedRankVal = Math.max(1, Math.round(500000 - (totalScore / maxScore) * 490000));
-    await prisma.predictionResult.upsert({
-      where: {
-        attemptId_modelVersion_configVersion_datasetVersion: {
+      });
+      inc('time_analyses', false);
+    } else {
+      await prisma.timeAnalysis.create({
+        data: {
           attemptId: att.id,
-          modelVersion: 'v1.0.0',
-          configVersion: 1,
-          datasetVersion: 1,
+          analysisVersion: 1,
+          algorithmVersion: 'v1.0.0',
+          totalTimeAvailableSeconds: 3600,
+          totalTimeUsedSeconds: totalTimeUsed,
+          timeRemainingSeconds: Math.max(0, 3600 - totalTimeUsed),
+          timeUtilizationPercentage: (totalTimeUsed / 3600) * 100,
+          averageTimePerQuestionSeconds: totalTimeUsed / (examQuestions.length || 1),
+          averageTimePerAttemptedQuestion: totalTimeUsed / (totalAnswered || 1),
+          medianTimePerQuestionSeconds: 65,
+          timeWastedSeconds: wrongCount * 45,
+          data: {
+            paceClassification: totalTimeUsed < 2800 ? 'FAST' : 'BALANCED',
+            rushEndPercentage: 5.2,
+          },
         },
-      },
-      update: {
-        inputScore: totalScore,
-        normalizedScore: percentage,
-        predictedRank: predictedRankVal,
-      },
-      create: {
+      });
+      inc('time_analyses', true);
+    }
+
+    // 4. Persist Strategy Analysis
+    const isAggressive = wrongCount > 4;
+    const existingSa = await prisma.strategyAnalysis.findFirst({
+      where: { attemptId: att.id, strategyVersion: 1 },
+    });
+    if (existingSa) {
+      await prisma.strategyAnalysis.update({
+        where: { id: existingSa.id },
+        data: {
+          projectedScore: totalScore + wrongCount * 1.5,
+          avoidableNegativeMarks: wrongCount * 1.0,
+        },
+      });
+      inc('strategy_analyses', false);
+    } else {
+      await prisma.strategyAnalysis.create({
+        data: {
+          attemptId: att.id,
+          strategyVersion: 1,
+          algorithmVersion: 'v1.0.0',
+          primaryClassification: isAggressive ? 'HIGH_RISK_AGGRESSIVE' : 'BALANCED',
+          classifications: isAggressive ? ['HIGH_RISK', 'TIME_OVERUSE'] : ['BALANCED', 'CONSISTENT'],
+          metrics: {
+            coveragePercentage: (totalAnswered / examQuestions.length) * 100,
+            riskFactor: wrongCount / (examQuestions.length || 1),
+          },
+          recommendations: [
+            {
+              type: 'NEGATIVE_MARKS',
+              message: `Eliminate speculative guesswork to save ${wrongCount} negative marks.`,
+            },
+          ],
+          projectedImprovementMarks: wrongCount * 2.5,
+          projectedScore: totalScore + wrongCount * 1.5,
+          avoidableNegativeMarks: wrongCount * 1.0,
+          data: { generatedAt: new Date() },
+        },
+      });
+      inc('strategy_analyses', true);
+    }
+
+    // 5. Predicted Rank
+    const predictedRankVal = Math.max(1, Math.round(500000 - (totalScore / maxScore) * 490000));
+    const existingPr = await prisma.predictionResult.findFirst({
+      where: {
         attemptId: att.id,
-        examVersionId: examMock01Version.id,
-        modelCode: 'HISTORICAL_INTERPOLATION',
         modelVersion: 'v1.0.0',
         configVersion: 1,
         datasetVersion: 1,
-        inputScore: totalScore,
-        normalizedScore: percentage,
-        predictedRank: predictedRankVal,
-        predictedRankMin: Math.max(1, Math.round(predictedRankVal * 0.85)),
-        predictedRankMax: Math.round(predictedRankVal * 1.15),
-        confidence: 'HIGH',
-        confidenceScore: 88.5,
-        percentileEstimate: percentage,
-        status: PredictionStatus.COMPLETED,
       },
     });
-    inc('prediction_results', true);
+    if (existingPr) {
+      await prisma.predictionResult.update({
+        where: { id: existingPr.id },
+        data: {
+          inputScore: totalScore,
+          normalizedScore: percentage,
+          predictedRank: predictedRankVal,
+        },
+      });
+      inc('prediction_results', false);
+    } else {
+      await prisma.predictionResult.create({
+        data: {
+          attemptId: att.id,
+          examVersionId: examMock01Version.id,
+          modelCode: 'HISTORICAL_INTERPOLATION',
+          modelVersion: 'v1.0.0',
+          configVersion: 1,
+          datasetVersion: 1,
+          inputScore: totalScore,
+          normalizedScore: percentage,
+          predictedRank: predictedRankVal,
+          predictedRankMin: Math.max(1, Math.round(predictedRankVal * 0.85)),
+          predictedRankMax: Math.round(predictedRankVal * 1.15),
+          confidence: 'HIGH',
+          confidenceScore: 88.5,
+          percentileEstimate: percentage,
+          status: PredictionStatus.COMPLETED,
+        },
+      });
+      inc('prediction_results', true);
+    }
 
     evaluatedList.push({
       attemptId: att.id,
@@ -289,32 +323,42 @@ export async function seedResultsAndAnalytics(ctx: SeedContext): Promise<SeederR
   const lowestScore = evaluatedList[evaluatedList.length - 1]?.totalScore || 0;
   const avgScore = evaluatedList.reduce((acc, e) => acc + e.totalScore, 0) / (evaluatedList.length || 1);
 
-  const rankSnapshot = await prisma.rankSnapshot.upsert({
-    where: { examId_snapshotVersion: { examId: examMock01.id, snapshotVersion: 1 } },
-    update: {
-      totalCandidates: evaluatedList.length,
-      highestScore,
-      lowestScore,
-      averageScore: avgScore,
-      completedAt: new Date(),
-    },
-    create: {
-      examId: examMock01.id,
-      examVersionId: examMock01Version.id,
-      snapshotVersion: 1,
-      algorithmVersion: 'v1.0.0',
-      configVersion: 1,
-      status: RankSnapshotStatus.COMPLETED,
-      totalCandidates: evaluatedList.length,
-      highestScore,
-      lowestScore,
-      averageScore: avgScore,
-      medianScore: evaluatedList[Math.floor(evaluatedList.length / 2)]?.totalScore || 0,
-      integrityChecksPassed: true,
-      completedAt: new Date(),
-    },
+  const existingRs = await prisma.rankSnapshot.findFirst({
+    where: { examId: examMock01.id, snapshotVersion: 1 },
   });
-  inc('rank_snapshots', true);
+  let rankSnapshot;
+  if (existingRs) {
+    rankSnapshot = await prisma.rankSnapshot.update({
+      where: { id: existingRs.id },
+      data: {
+        totalCandidates: evaluatedList.length,
+        highestScore,
+        lowestScore,
+        averageScore: avgScore,
+        completedAt: new Date(),
+      },
+    });
+    inc('rank_snapshots', false);
+  } else {
+    rankSnapshot = await prisma.rankSnapshot.create({
+      data: {
+        examId: examMock01.id,
+        examVersionId: examMock01Version.id,
+        snapshotVersion: 1,
+        algorithmVersion: 'v1.0.0',
+        configVersion: 1,
+        status: RankSnapshotStatus.COMPLETED,
+        totalCandidates: evaluatedList.length,
+        highestScore,
+        lowestScore,
+        averageScore: avgScore,
+        medianScore: evaluatedList[Math.floor(evaluatedList.length / 2)]?.totalScore || 0,
+        integrityChecksPassed: true,
+        completedAt: new Date(),
+      },
+    });
+    inc('rank_snapshots', true);
+  }
 
   for (let rIdx = 0; rIdx < evaluatedList.length; rIdx++) {
     const item = evaluatedList[rIdx];
@@ -322,79 +366,90 @@ export async function seedResultsAndAnalytics(ctx: SeedContext): Promise<SeederR
     const percentile = ((evaluatedList.length - rank) / evaluatedList.length) * 100;
 
     // Overall All-India Rank
-    await prisma.candidateRank.upsert({
+    const existingOverallRank = await prisma.candidateRank.findFirst({
       where: {
-        rankSnapshotId_attemptId_rankType_scopeId_categoryId: {
+        rankSnapshotId: rankSnapshot.id,
+        attemptId: item.attemptId,
+        rankType: RankType.OVERALL,
+      },
+    });
+    if (existingOverallRank) {
+      await prisma.candidateRank.update({
+        where: { id: existingOverallRank.id },
+        data: {
+          rank,
+          percentile,
+          score: item.totalScore,
+          accuracy: item.accuracy,
+        },
+      });
+      inc('candidate_ranks', false);
+    } else {
+      await prisma.candidateRank.create({
+        data: {
           rankSnapshotId: rankSnapshot.id,
           attemptId: item.attemptId,
+          studentId: item.studentId,
           rankType: RankType.OVERALL,
           scopeId: '',
           categoryId: '',
+          rank,
+          totalCandidates: evaluatedList.length,
+          percentile,
+          score: item.totalScore,
+          accuracy: item.accuracy,
+          timeUsedSeconds: item.timeUsedSeconds,
+          predictedRankMin: Math.max(1, rank * 10),
+          predictedRankMax: rank * 15,
+          predictionConfidence: 'HIGH',
         },
-      },
-      update: {
-        rank,
-        percentile,
-        score: item.totalScore,
-        accuracy: item.accuracy,
-      },
-      create: {
-        rankSnapshotId: rankSnapshot.id,
-        attemptId: item.attemptId,
-        studentId: item.studentId,
-        rankType: RankType.OVERALL,
-        scopeId: '',
-        categoryId: '',
-        rank,
-        totalCandidates: evaluatedList.length,
-        percentile,
-        score: item.totalScore,
-        accuracy: item.accuracy,
-        timeUsedSeconds: item.timeUsedSeconds,
-        predictedRankMin: Math.max(1, rank * 10),
-        predictedRankMax: rank * 15,
-        predictionConfidence: 'HIGH',
-      },
-    });
-    inc('candidate_ranks', true);
+      });
+      inc('candidate_ranks', true);
+    }
 
     // State Rank
     const stateCandidates = evaluatedList.filter((e) => e.stateName === item.stateName);
     const stateRank = stateCandidates.findIndex((e) => e.attemptId === item.attemptId) + 1;
     const statePercentile = ((stateCandidates.length - stateRank) / (stateCandidates.length || 1)) * 100;
 
-    await prisma.candidateRank.upsert({
+    const existingStateRank = await prisma.candidateRank.findFirst({
       where: {
-        rankSnapshotId_attemptId_rankType_scopeId_categoryId: {
-          rankSnapshotId: rankSnapshot.id,
-          attemptId: item.attemptId,
-          rankType: RankType.STATE,
-          scopeId: item.stateName,
-          categoryId: '',
-        },
-      },
-      update: {
-        rank: stateRank,
-        percentile: statePercentile,
-        score: item.totalScore,
-      },
-      create: {
         rankSnapshotId: rankSnapshot.id,
         attemptId: item.attemptId,
-        studentId: item.studentId,
         rankType: RankType.STATE,
         scopeId: item.stateName,
-        scopeName: item.stateName,
-        categoryId: '',
-        rank: stateRank,
-        totalCandidates: stateCandidates.length,
-        percentile: statePercentile,
-        score: item.totalScore,
-        accuracy: item.accuracy,
-        timeUsedSeconds: item.timeUsedSeconds,
       },
     });
-    inc('candidate_ranks', true);
+    if (existingStateRank) {
+      await prisma.candidateRank.update({
+        where: { id: existingStateRank.id },
+        data: {
+          rank: stateRank,
+          percentile: statePercentile,
+          score: item.totalScore,
+        },
+      });
+      inc('candidate_ranks', false);
+    } else {
+      await prisma.candidateRank.create({
+        data: {
+          rankSnapshotId: rankSnapshot.id,
+          attemptId: item.attemptId,
+          studentId: item.studentId,
+          rankType: RankType.STATE,
+          scopeId: item.stateName,
+          scopeName: item.stateName,
+          categoryId: '',
+          rank: stateRank,
+          totalCandidates: stateCandidates.length,
+          percentile: statePercentile,
+          score: item.totalScore,
+          accuracy: item.accuracy,
+          timeUsedSeconds: item.timeUsedSeconds,
+        },
+      });
+      inc('candidate_ranks', true);
+    }
   }
 
   return {

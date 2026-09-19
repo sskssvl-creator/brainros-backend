@@ -85,22 +85,26 @@ export async function seedAcademicQuestions(ctx: SeedContext): Promise<SeederRes
     for (const subName of mapping.subjectNames) {
       const sub = ctx.subjects.get(subName);
       if (!sub) continue;
-      await prisma.examTargetSubject.upsert({
+      const existingEts = await prisma.examTargetSubject.findFirst({
         where: {
-          examTargetId_subjectId: {
-            examTargetId: mapping.target.id,
-            subjectId: sub.id,
-          },
-        },
-        create: {
           examTargetId: mapping.target.id,
           subjectId: sub.id,
-          displayOrder: order++,
-        },
-        update: {
-          displayOrder: order++,
         },
       });
+      if (existingEts) {
+        await prisma.examTargetSubject.update({
+          where: { id: existingEts.id },
+          data: { displayOrder: order++ },
+        });
+      } else {
+        await prisma.examTargetSubject.create({
+          data: {
+            examTargetId: mapping.target.id,
+            subjectId: sub.id,
+            displayOrder: order++,
+          },
+        });
+      }
     }
   }
 

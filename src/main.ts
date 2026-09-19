@@ -1,9 +1,15 @@
 import './common/infrastructure/init-bullmq';
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
-dotenv.config({ path: '.env', override: true });
 if (process.env.NODE_ENV === 'production' && fs.existsSync('.env.production')) {
   dotenv.config({ path: '.env.production', override: true });
+} else {
+  if (fs.existsSync('.env')) {
+    dotenv.config({ path: '.env', override: true });
+  }
+  if (process.env.NODE_ENV === 'production' && fs.existsSync('.env.production')) {
+    dotenv.config({ path: '.env.production', override: true });
+  }
 }
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
@@ -59,6 +65,47 @@ async function bootstrap() {
 
   // Enable graceful shutdown hooks for SIGTERM / SIGINT
   app.enableShutdownHooks();
+
+  // Trust reverse proxy headers (Hostinger CDN / Cloud Nginx)
+  const expressInstance = app.getHttpAdapter().getInstance() as express.Application;
+  if (expressInstance && typeof expressInstance.set === 'function') {
+    expressInstance.set('trust proxy', 1);
+  }
+
+  // Allow test client IPs (ALLOWED_TEST_IPS) for high-concurrency load testing
+  const rawAllowedTestIps = process.env.ALLOWED_TEST_IPS || '';
+  const allowedTestIps = new Set(
+    rawAllowedTestIps
+      .split(',')
+      .map((ip) => ip.trim())
+      .filter((ip) => ip.length > 0),
+  );
+
+  if (allowedTestIps.size > 0) {
+    appLogger.log(
+      `[Security] Configured ALLOWED_TEST_IPS whitelist: [${Array.from(allowedTestIps).join(', ')}]`,
+      'Bootstrap',
+    );
+  }
+
+  app.use((req: any, _res: any, next: any) => {
+    if (allowedTestIps.size > 0) {
+      const clientIp =
+        req.headers['cf-connecting-ip'] ||
+        req.headers['x-real-ip'] ||
+        (typeof req.headers['x-forwarded-for'] === 'string'
+          ? req.headers['x-forwarded-for'].split(',')[0].trim()
+          : undefined) ||
+        req.ip ||
+        req.socket?.remoteAddress ||
+        '';
+
+      if (allowedTestIps.has('*') || allowedTestIps.has(clientIp)) {
+        req.isAllowedTestIp = true;
+      }
+    }
+    next();
+  });
 
   // Security middlewares
   app.use(

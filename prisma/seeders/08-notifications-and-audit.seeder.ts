@@ -28,24 +28,30 @@ export async function seedNotificationsAndAudit(ctx: SeedContext): Promise<Seede
   const studentsList = Array.from(ctx.students.values()).slice(0, 10);
 
   for (const st of studentsList) {
-    // Preference
-    await prisma.notificationPreference.upsert({
+    const existingNp = await prisma.notificationPreference.findFirst({
       where: {
-        userId_notificationType_channel: {
-          userId: st.userId,
-          notificationType: NotificationType.RESULT_AVAILABLE,
-          channel: NotificationChannel.EMAIL,
-        },
-      },
-      update: { enabled: true },
-      create: {
         userId: st.userId,
         notificationType: NotificationType.RESULT_AVAILABLE,
         channel: NotificationChannel.EMAIL,
-        enabled: true,
       },
     });
-    inc('notification_preferences', true);
+    if (existingNp) {
+      await prisma.notificationPreference.update({
+        where: { id: existingNp.id },
+        data: { enabled: true },
+      });
+      inc('notification_preferences', false);
+    } else {
+      await prisma.notificationPreference.create({
+        data: {
+          userId: st.userId,
+          notificationType: NotificationType.RESULT_AVAILABLE,
+          channel: NotificationChannel.EMAIL,
+          enabled: true,
+        },
+      });
+      inc('notification_preferences', true);
+    }
 
     // Mock Sent Notification (Scorecard)
     const notification = await prisma.notification.create({
@@ -144,26 +150,33 @@ export async function seedNotificationsAndAudit(ctx: SeedContext): Promise<Seede
   ];
 
   for (const f of features) {
-    await prisma.featureActivation.upsert({
+    const existingFa = await prisma.featureActivation.findFirst({
       where: {
-        featureCode_targetType_targetId: {
-          featureCode: f,
-          targetType: 'GLOBAL',
-          targetId: 'GLOBAL',
-        },
-      },
-      update: { isActive: true },
-      create: {
         featureCode: f,
         targetType: 'GLOBAL',
         targetId: 'GLOBAL',
-        isActive: true,
-        activatedById: superAdmin.id,
-        activatedAt: new Date(),
-        reason: 'Default platform activation for test/dev environment',
       },
     });
-    inc('feature_activations', true);
+    if (existingFa) {
+      await prisma.featureActivation.update({
+        where: { id: existingFa.id },
+        data: { isActive: true },
+      });
+      inc('feature_activations', false);
+    } else {
+      await prisma.featureActivation.create({
+        data: {
+          featureCode: f,
+          targetType: 'GLOBAL',
+          targetId: 'GLOBAL',
+          isActive: true,
+          activatedById: superAdmin.id,
+          activatedAt: new Date(),
+          reason: 'Default platform activation for test/dev environment',
+        },
+      });
+      inc('feature_activations', true);
+    }
   }
 
   return {

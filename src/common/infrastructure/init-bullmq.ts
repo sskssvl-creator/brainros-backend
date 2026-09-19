@@ -1,9 +1,15 @@
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
-if (fs.existsSync('.env.production')) {
-  dotenv.config({ path: '.env.production' });
+if (process.env.NODE_ENV === 'production' && fs.existsSync('.env.production')) {
+  dotenv.config({ path: '.env.production', override: true });
+} else {
+  if (fs.existsSync('.env')) {
+    dotenv.config({ path: '.env', override: true });
+  }
+  if (process.env.NODE_ENV === 'production' && fs.existsSync('.env.production')) {
+    dotenv.config({ path: '.env.production', override: true });
+  }
 }
-dotenv.config({ path: '.env' });
 import { Logger } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { MockQueue, MockWorker } from './mock-queue';

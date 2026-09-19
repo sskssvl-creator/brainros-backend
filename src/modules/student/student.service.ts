@@ -664,7 +664,7 @@ export class StudentService {
         {
           OR: [
             { startTime: { gt: now } },
-            { schedules: { some: { status: { in: ['SCHEDULED', 'ACTIVE'] }, startTime: { gt: now } } } },
+            { schedules: { some: { status: { name: { in: ['SCHEDULED', 'ACTIVE'] } }, startTime: { gt: now } } } },
           ],
         },
         {
@@ -684,7 +684,7 @@ export class StudentService {
         {
           OR: [
             { startTime: { lte: now }, endTime: { gt: now } },
-            { schedules: { some: { status: 'ACTIVE', startTime: { lte: now }, endTime: { gt: now } } } },
+            { schedules: { some: { status: { name: 'ACTIVE' }, startTime: { lte: now }, endTime: { gt: now } } } },
           ],
         },
         {
@@ -734,7 +734,7 @@ export class StudentService {
     }
 
     // Database-level pagination with LIMIT and OFFSET
-    const [rawExams, total] = await Promise.all([
+    const [rawExams, total]: [any[], number] = await Promise.all([
       this.prisma.exam.findMany({
         where,
         skip,

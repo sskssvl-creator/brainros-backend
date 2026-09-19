@@ -552,19 +552,27 @@ export async function seedMasterData(ctx: SeedContext): Promise<SeederResult> {
   ];
 
   for (const nt of notificationTemplates) {
-    await prisma.notificationTemplate.upsert({
+    const existing = await prisma.notificationTemplate.findFirst({
       where: {
-        notificationType_channel_languageCode_version: {
-          notificationType: nt.notificationType,
-          channel: nt.channel,
-          languageCode: nt.languageCode,
-          version: 1,
-        },
+        notificationType: nt.notificationType,
+        channel: nt.channel,
+        languageCode: nt.languageCode,
+        version: 1,
       },
-      update: { body: nt.body, subject: nt.subject },
-      create: { ...nt, version: 1, isActive: true },
     });
-    inc('notification_templates', true);
+
+    if (existing) {
+      await prisma.notificationTemplate.update({
+        where: { id: existing.id },
+        data: { body: nt.body, subject: nt.subject },
+      });
+      inc('notification_templates', false);
+    } else {
+      await prisma.notificationTemplate.create({
+        data: { ...nt, version: 1, isActive: true },
+      });
+      inc('notification_templates', true);
+    }
   }
 
   return {

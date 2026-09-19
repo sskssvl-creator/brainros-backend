@@ -16,10 +16,9 @@ module.exports = {
     {
       name: 'brainros-backend',
       script: 'dist/main.js',
-      // For VPS with BullMQ workers, fork mode with 1-2 instances is recommended
-      // to avoid duplicate scheduled queue tasks. Set to 'max' if purely stateless HTTP.
-      instances: 1,
-      exec_mode: 'fork',
+      // Cluster mode across available CPU cores for high concurrent HTTP/Bcrypt throughput
+      instances: 'max',
+      exec_mode: 'cluster',
 
       // Auto-restart on unexpected crashes
       autorestart: true,

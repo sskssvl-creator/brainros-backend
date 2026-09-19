@@ -140,30 +140,40 @@ export async function seedExamsAndBlueprints(ctx: SeedContext): Promise<SeederRe
     ctx.exams.set(eData.code, exam);
 
     // Link Languages
-    await prisma.examLanguage.upsert({
-      where: { examId_languageId: { examId: exam.id, languageId: defaultLang.id } },
-      update: {},
-      create: {
-        examId: exam.id,
-        languageId: defaultLang.id,
-        isDefault: true,
-        displayOrder: 1,
-      },
+    const existingElDef = await prisma.examLanguage.findFirst({
+      where: { examId: exam.id, languageId: defaultLang.id },
     });
-    inc('exam_languages', true);
-
-    if (hindiLang) {
-      await prisma.examLanguage.upsert({
-        where: { examId_languageId: { examId: exam.id, languageId: hindiLang.id } },
-        update: {},
-        create: {
+    if (!existingElDef) {
+      await prisma.examLanguage.create({
+        data: {
           examId: exam.id,
-          languageId: hindiLang.id,
-          isDefault: false,
-          displayOrder: 2,
+          languageId: defaultLang.id,
+          isDefault: true,
+          displayOrder: 1,
         },
       });
       inc('exam_languages', true);
+    } else {
+      inc('exam_languages', false);
+    }
+
+    if (hindiLang) {
+      const existingElHi = await prisma.examLanguage.findFirst({
+        where: { examId: exam.id, languageId: hindiLang.id },
+      });
+      if (!existingElHi) {
+        await prisma.examLanguage.create({
+          data: {
+            examId: exam.id,
+            languageId: hindiLang.id,
+            isDefault: false,
+            displayOrder: 2,
+          },
+        });
+        inc('exam_languages', true);
+      } else {
+        inc('exam_languages', false);
+      }
     }
 
     // Exam Scoring Rules
