@@ -35,6 +35,54 @@ export class CompletedExamReportsController {
   ) {}
 
   /**
+   * List all completed exams with pagination, search and filters.
+   * GET /admin/exam-history
+   * GET /super-admin/exam-history
+   */
+  @Get(['admin/exam-history', 'super-admin/exam-history'])
+  async getExamHistory(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+    @Query('examTargetId') examTargetId?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
+  ) {
+    const data = await this.reportsService.getCompletedExamHistoryPaginated({
+      page: page ? parseInt(page, 10) : 1,
+      limit: limit ? parseInt(limit, 10) : 10,
+      search,
+      examTargetId,
+      startDate,
+      endDate,
+      sortBy,
+      sortOrder,
+    });
+    return {
+      statusCode: HttpStatus.OK,
+      message: 'Completed exam history retrieved successfully',
+      data,
+    };
+  }
+
+  /**
+   * Get full granular details of a completed exam.
+   * GET /admin/exam-history/:examId/details
+   * GET /super-admin/exam-history/:examId/details
+   */
+  @Get(['admin/exam-history/:examId/details', 'super-admin/exam-history/:examId/details'])
+  async getExamHistoryDetails(@Param('examId') examId: string) {
+    const data = await this.reportsService.getCompletedExamFullDetails(examId);
+    return {
+      statusCode: HttpStatus.OK,
+      message: 'Exam full details retrieved successfully',
+      data,
+    };
+  }
+
+  /**
    * List all completed Live Exams (latest first, excluding mock tests).
    * GET /admin/completed-exams
    * GET /super-admin/completed-exams

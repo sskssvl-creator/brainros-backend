@@ -309,6 +309,15 @@ export class ExamService {
           orderBy: { displayOrder: 'asc' },
           include: {
             subject: { select: { id: true, name: true } },
+            examQuestions: {
+              include: {
+                question: {
+                  select: {
+                    chapter: { select: { id: true, name: true } },
+                  },
+                },
+              },
+            },
             _count: { select: { examQuestions: true } },
           },
         },
@@ -394,6 +403,44 @@ export class ExamService {
       }
     }
 
+    // Extract configured chapters from performanceThresholds (from Admin Exam Scheduling)
+    let thresholdData: any = null;
+    try {
+      if (typeof exam.performanceThresholds === 'string') {
+        thresholdData = JSON.parse(exam.performanceThresholds);
+      } else if (exam.performanceThresholds && typeof exam.performanceThresholds === 'object') {
+        thresholdData = exam.performanceThresholds;
+      }
+    } catch (e) {
+      thresholdData = null;
+    }
+
+    const allConfiguredChapterIds: string[] = [];
+    if (thresholdData?.subjectGroups && Array.isArray(thresholdData.subjectGroups)) {
+      for (const group of thresholdData.subjectGroups) {
+        if (group.chapterIds && Array.isArray(group.chapterIds)) {
+          allConfiguredChapterIds.push(...group.chapterIds);
+        }
+      }
+    }
+    if (thresholdData?.chapterIds && Array.isArray(thresholdData.chapterIds)) {
+      allConfiguredChapterIds.push(...thresholdData.chapterIds);
+    }
+    if (thresholdData?.chapterId) {
+      allConfiguredChapterIds.push(thresholdData.chapterId);
+    }
+
+    let dbConfiguredChapters: { id: string; name: string; subjectId: string }[] = [];
+    if (allConfiguredChapterIds.length > 0) {
+      dbConfiguredChapters = await this.prisma.chapter.findMany({
+        where: { id: { in: allConfiguredChapterIds } },
+        select: { id: true, name: true, subjectId: true },
+      });
+    }
+
+    const dbChapterMap = new Map<string, { id: string; name: string; subjectId: string }>();
+    dbConfiguredChapters.forEach((c) => dbChapterMap.set(c.id, c));
+
     return {
       exam: {
         id: exam.id,
@@ -407,15 +454,48 @@ export class ExamService {
         examTarget: exam.examTarget,
         status: exam.status,
         languages: exam.languages.map((l) => l.language || l),
-        sections: exam.sections.map((s) => ({
-          id: s.id,
-          name: s.name,
-          displayOrder: s.displayOrder,
-          totalQuestions: s.totalQuestions || s._count?.examQuestions || 0,
-          marksPerQuestion: exam.defaultMarksPerQuestion,
-          negativeMarks: exam.defaultNegativeMarks,
-          subject: s.subject,
-        })),
+        sections: exam.sections.map((s) => {
+          const chapterNamesSet = new Set<string>();
+
+          // 1. Chapters from questions attached to this section
+          s.examQuestions?.forEach((eq: any) => {
+            if (eq.question?.chapter?.name) {
+              chapterNamesSet.add(eq.question.chapter.name.trim());
+            }
+          });
+
+          // 2. Chapters configured for this subject in performanceThresholds / subjectGroups
+          if (thresholdData?.subjectGroups && Array.isArray(thresholdData.subjectGroups)) {
+            const matchedGroup = thresholdData.subjectGroups.find(
+              (g: any) => g.subjectId === s.subjectId,
+            );
+            if (matchedGroup && Array.isArray(matchedGroup.chapterIds)) {
+              for (const chId of matchedGroup.chapterIds) {
+                const ch = dbChapterMap.get(chId);
+                if (ch?.name) {
+                  chapterNamesSet.add(ch.name.trim());
+                }
+              }
+            }
+          } else if (allConfiguredChapterIds.length > 0) {
+            dbConfiguredChapters
+              .filter((c) => c.subjectId === s.subjectId)
+              .forEach((c) => chapterNamesSet.add(c.name.trim()));
+          }
+
+          const chapters = Array.from(chapterNamesSet);
+
+          return {
+            id: s.id,
+            name: s.name,
+            displayOrder: s.displayOrder,
+            totalQuestions: s.totalQuestions || s._count?.examQuestions || 0,
+            marksPerQuestion: exam.defaultMarksPerQuestion,
+            negativeMarks: exam.defaultNegativeMarks,
+            subject: s.subject,
+            chapters,
+          };
+        }),
         schedule: activeSchedule
           ? {
               id: activeSchedule.id,

@@ -156,7 +156,10 @@ export class ResultProcessingMonitorService {
         where: {
           examId,
           status: { name: { in: ['SUBMITTED', 'AUTO_SUBMITTED'] } },
-          result: { resultStatus: ResultStatusEnum.PENDING_WINDOW_CLOSE },
+          OR: [
+            { result: null },
+            { result: { resultStatus: ResultStatusEnum.PENDING_WINDOW_CLOSE } },
+          ],
         },
         select: { id: true },
       });
@@ -173,7 +176,7 @@ export class ResultProcessingMonitorService {
               triggeredAt: now.toISOString(),
             },
             {
-              jobId: `window_end_monitor_${examId}`,
+              jobId: `window_end_monitor_${examId}_${Date.now()}`,
               removeOnComplete: true,
             },
           )
@@ -342,7 +345,9 @@ export class ResultProcessingMonitorService {
         orderBy: { snapshotVersion: 'desc' },
         select: { status: true },
       });
-      rankingSnapshotCompleted = latestRankSnapshot?.status === 'COMPLETED';
+      rankingSnapshotCompleted = latestRankSnapshot
+        ? latestRankSnapshot.status === 'COMPLETED'
+        : (Number(stats?.ranking_completed || 0) === totalJobs && totalJobs > 0);
     } catch {
       rankingSnapshotCompleted = totalJobs > 0;
     }

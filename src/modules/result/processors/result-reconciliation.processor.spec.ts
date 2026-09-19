@@ -6,9 +6,14 @@ import { ResultService } from '../result.service';
 import { ResultReadinessService } from '../services/result-readiness.service';
 import { ResultAccessService } from '../services/result-access.service';
 import { JobProgressService } from '../../job-progress/services/job-progress.service';
+import { TimeAnalysisService } from '../../time-analysis/services/time-analysis.service';
+import { StrategyAnalyzerService } from '../../attempt-strategy/services/strategy-analyzer.service';
+import { RankGenerationService } from '../../rank-engine/services/rank-generation.service';
 import { getQueueToken } from '@nestjs/bullmq';
 import {
   EVALUATION_QUEUE_NAME,
+  ANALYTICS_QUEUE_NAME,
+  RANKING_QUEUE_NAME,
   EXAM_WINDOW_END_QUEUE_NAME,
   ResultStatusEnum,
 } from '../interfaces/result-lifecycle.interface';
@@ -20,6 +25,7 @@ describe('ResultReconciliationProcessor (Background Recovery & Reconciliation)',
     result: {
       findMany: jest.fn(),
       update: jest.fn().mockResolvedValue({}),
+      upsert: jest.fn().mockResolvedValue({}),
     },
     attempt: {
       findMany: jest.fn(),
@@ -27,6 +33,15 @@ describe('ResultReconciliationProcessor (Background Recovery & Reconciliation)',
     },
     exam: {
       findMany: jest.fn().mockResolvedValue([]),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
+    examSchedule: {
+      findMany: jest.fn().mockResolvedValue([]),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
+    examStatus: {
+      findUnique: jest.fn().mockResolvedValue({ id: 'status-ended' }),
     },
     attemptStatus: {
       findUnique: jest.fn().mockResolvedValue({ id: 'status-auto' }),
@@ -51,6 +66,18 @@ describe('ResultReconciliationProcessor (Background Recovery & Reconciliation)',
     invalidateResultCache: jest.fn().mockResolvedValue(undefined),
   };
 
+  const mockTimeAnalysisService = {
+    generateTimeAnalysis: jest.fn().mockResolvedValue({}),
+  };
+
+  const mockStrategyAnalyzerService = {
+    generateStrategyAnalysis: jest.fn().mockResolvedValue({}),
+  };
+
+  const mockRankGenerationService = {
+    generateRanks: jest.fn().mockResolvedValue({}),
+  };
+
   const mockQueue = {
     add: jest.fn().mockResolvedValue({ id: 'job-1' }),
   };
@@ -64,7 +91,12 @@ describe('ResultReconciliationProcessor (Background Recovery & Reconciliation)',
         { provide: ResultService, useValue: mockResultService },
         { provide: ResultReadinessService, useValue: mockReadinessService },
         { provide: ResultAccessService, useValue: mockResultAccessService },
+        { provide: TimeAnalysisService, useValue: mockTimeAnalysisService },
+        { provide: StrategyAnalyzerService, useValue: mockStrategyAnalyzerService },
+        { provide: RankGenerationService, useValue: mockRankGenerationService },
         { provide: getQueueToken(EVALUATION_QUEUE_NAME), useValue: mockQueue },
+        { provide: getQueueToken(ANALYTICS_QUEUE_NAME), useValue: mockQueue },
+        { provide: getQueueToken(RANKING_QUEUE_NAME), useValue: mockQueue },
         { provide: getQueueToken(EXAM_WINDOW_END_QUEUE_NAME), useValue: mockQueue },
         {
           provide: JobProgressService,

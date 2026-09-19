@@ -114,7 +114,7 @@ export class AnalyticsProcessor extends WorkerHost {
       }
 
       // 4. Enqueue Ranking Worker
-      const rankingJobId = `ranking_${attemptId}`;
+      const rankingJobId = `ranking_${attemptId}_${Date.now()}`;
       await this.rankingQueue.add(
         'RUN_RANKING',
         {

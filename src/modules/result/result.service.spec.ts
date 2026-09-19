@@ -3,6 +3,8 @@ import { ResultService } from './result.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AnalysisEngineService } from './services/analysis-engine.service';
 import { ResultAccessService } from './services/result-access.service';
+import { ExamReportPdfService } from '../admin/services/exam-report-pdf.service';
+import { ResendEmailService } from '../admin/services/resend-email.service';
 import { NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { ResultProcessingStatus, ResultPublicationStatus } from './interfaces/result-lifecycle.interface';
 
@@ -52,6 +54,14 @@ describe('ResultService (Calculation, Read-Only Reports, and Verification)', () 
     invalidateResultCache: jest.fn().mockResolvedValue(undefined),
   };
 
+  const mockPdfService = {
+    generateExamAnalysisPdf: jest.fn().mockResolvedValue(Buffer.from('pdf-content')),
+  };
+
+  const mockResendEmailService = {
+    sendReportEmail: jest.fn().mockResolvedValue({ success: true }),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -59,6 +69,8 @@ describe('ResultService (Calculation, Read-Only Reports, and Verification)', () 
         { provide: PrismaService, useValue: mockPrisma },
         { provide: AnalysisEngineService, useValue: mockAnalysisEngine },
         { provide: ResultAccessService, useValue: mockResultAccessService },
+        { provide: ExamReportPdfService, useValue: mockPdfService },
+        { provide: ResendEmailService, useValue: mockResendEmailService },
       ],
     }).compile();
 

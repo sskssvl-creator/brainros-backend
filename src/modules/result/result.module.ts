@@ -1,4 +1,4 @@
-import { Module, forwardRef, OnModuleInit } from '@nestjs/common';
+import { Module, forwardRef, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { BullModule, InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { ResultController } from './result.controller';
@@ -80,23 +80,43 @@ import { ResendEmailService } from '../admin/services/resend-email.service';
     BullModule,
   ],
 })
-export class ResultModule implements OnModuleInit {
+export class ResultModule implements OnModuleInit, OnModuleDestroy {
+  private reconciliationTimer: NodeJS.Timeout | null = null;
+
   constructor(
     @InjectQueue(RECONCILIATION_QUEUE_NAME)
     private readonly reconciliationQueue: Queue,
+    private readonly reconciliationProcessor: ResultReconciliationProcessor,
   ) {}
 
   async onModuleInit() {
+    // 1. Initial startup reconciliation check after 2 seconds
+    setTimeout(() => {
+      this.reconciliationProcessor.runReconciliation('startup_reconciliation').catch(() => {});
+    }, 2000);
+
+    // 2. Periodic in-process self-healing reconciliation timer every 20 seconds
+    this.reconciliationTimer = setInterval(() => {
+      this.reconciliationProcessor.runReconciliation().catch(() => {});
+    }, 20000);
+
+    // 3. Register BullMQ repeatable job for distributed worker clusters
     try {
       await this.reconciliationQueue.add(
         'RECONCILE',
         {},
         {
-          jobId: 'periodic_result_reconciliation',
           repeat: { every: 30000 },
           removeOnComplete: true,
         } as any,
       );
     } catch {}
+  }
+
+  onModuleDestroy() {
+    if (this.reconciliationTimer) {
+      clearInterval(this.reconciliationTimer);
+      this.reconciliationTimer = null;
+    }
   }
 }

@@ -52,6 +52,475 @@ export class CompletedExamReportsService {
   }
 
   /**
+   * Returns paginated list of all completed exams with search, filter, and metrics summary.
+   */
+  async getCompletedExamHistoryPaginated(query: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    examTargetId?: string;
+    startDate?: string;
+    endDate?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 10));
+    const skip = (page - 1) * limit;
+    const now = new Date();
+
+    const where: any = {
+      OR: [
+        { endTime: { lte: now } },
+        { status: { name: { in: ['ENDED', 'COMPLETED', 'PUBLISHED', 'EVALUATED'] } } },
+        {
+          schedules: {
+            some: {
+              OR: [
+                { endTime: { lte: now } },
+                { status: 'ENDED' },
+              ],
+            },
+          },
+        },
+        { attempts: { some: { status: { name: { in: ['SUBMITTED', 'EVALUATED', 'COMPLETED'] } } } } },
+      ],
+    };
+
+    if (query.search?.trim()) {
+      const q = query.search.trim();
+      where.AND = where.AND || [];
+      where.AND.push({
+        OR: [
+          { title: { contains: q, mode: 'insensitive' } },
+          { description: { contains: q, mode: 'insensitive' } },
+          { sections: { some: { subject: { name: { contains: q, mode: 'insensitive' } } } } },
+        ],
+      });
+    }
+
+    if (query.examTargetId?.trim() && query.examTargetId !== 'ALL') {
+      where.AND = where.AND || [];
+      where.AND.push({ examTargetId: query.examTargetId.trim() });
+    }
+
+    if (query.startDate) {
+      const sDate = new Date(query.startDate);
+      if (!isNaN(sDate.getTime())) {
+        where.AND = where.AND || [];
+        where.AND.push({
+          OR: [
+            { startTime: { gte: sDate } },
+            { examDate: { gte: sDate } },
+            { schedules: { some: { startTime: { gte: sDate } } } },
+          ],
+        });
+      }
+    }
+
+    if (query.endDate) {
+      const eDate = new Date(query.endDate);
+      if (!isNaN(eDate.getTime())) {
+        where.AND = where.AND || [];
+        where.AND.push({
+          OR: [
+            { endTime: { lte: eDate } },
+            { examDate: { lte: eDate } },
+            { schedules: { some: { endTime: { lte: eDate } } } },
+          ],
+        });
+      }
+    }
+
+    const [total, exams] = await Promise.all([
+      this.prisma.exam.count({ where }),
+      this.prisma.exam.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: [{ endTime: 'desc' }, { createdAt: 'desc' }],
+        include: {
+          status: true,
+          examTarget: { select: { id: true, name: true, description: true } },
+          schedules: {
+            orderBy: { endTime: 'desc' },
+            take: 1,
+          },
+          sections: {
+            orderBy: { displayOrder: 'asc' },
+            include: {
+              subject: { select: { id: true, name: true } },
+              examQuestions: {
+                include: {
+                  question: {
+                    select: {
+                      chapter: { select: { id: true, name: true } },
+                    },
+                  },
+                },
+              },
+              _count: { select: { examQuestions: true } },
+            },
+          },
+          resultPublications: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
+          _count: {
+            select: {
+              attempts: true,
+              examQuestions: true,
+            },
+          },
+        },
+      }),
+    ]);
+
+    const items = await Promise.all(
+      exams.map(async (exam) => {
+        const schedule = exam.schedules?.[0];
+        const pub = exam.resultPublications?.[0];
+
+        let thresholdData: any = null;
+        try {
+          if (typeof exam.performanceThresholds === 'string') {
+            thresholdData = JSON.parse(exam.performanceThresholds);
+          } else if (exam.performanceThresholds && typeof exam.performanceThresholds === 'object') {
+            thresholdData = exam.performanceThresholds;
+          }
+        } catch {
+          thresholdData = null;
+        }
+
+        const allConfiguredChapterIds: string[] = [];
+        if (thresholdData?.subjectGroups && Array.isArray(thresholdData.subjectGroups)) {
+          for (const group of thresholdData.subjectGroups) {
+            if (group.chapterIds && Array.isArray(group.chapterIds)) {
+              allConfiguredChapterIds.push(...group.chapterIds);
+            }
+          }
+        }
+
+        let dbConfiguredChapters: { id: string; name: string; subjectId: string }[] = [];
+        if (allConfiguredChapterIds.length > 0) {
+          dbConfiguredChapters = await this.prisma.chapter.findMany({
+            where: { id: { in: allConfiguredChapterIds } },
+            select: { id: true, name: true, subjectId: true },
+          });
+        }
+        const dbChapterMap = new Map<string, { id: string; name: string; subjectId: string }>();
+        dbConfiguredChapters.forEach((c) => dbChapterMap.set(c.id, c));
+
+        const formattedSections = exam.sections.map((s) => {
+          const chapterNamesSet = new Set<string>();
+
+          s.examQuestions?.forEach((eq: any) => {
+            if (eq.question?.chapter?.name) {
+              chapterNamesSet.add(eq.question.chapter.name.trim());
+            }
+          });
+
+          if (thresholdData?.subjectGroups && Array.isArray(thresholdData.subjectGroups)) {
+            const matchedGroup = thresholdData.subjectGroups.find(
+              (g: any) => g.subjectId === s.subjectId,
+            );
+            if (matchedGroup && Array.isArray(matchedGroup.chapterIds)) {
+              for (const chId of matchedGroup.chapterIds) {
+                const ch = dbChapterMap.get(chId);
+                if (ch?.name) {
+                  chapterNamesSet.add(ch.name.trim());
+                }
+              }
+            }
+          } else if (allConfiguredChapterIds.length > 0) {
+            dbConfiguredChapters
+              .filter((c) => c.subjectId === s.subjectId)
+              .forEach((c) => chapterNamesSet.add(c.name.trim()));
+          }
+
+          return {
+            id: s.id,
+            name: s.name,
+            displayOrder: s.displayOrder,
+            totalQuestions: s.totalQuestions || s._count?.examQuestions || 0,
+            subject: s.subject,
+            chapters: Array.from(chapterNamesSet),
+          };
+        });
+
+        const scoreStats = await this.prisma.result.aggregate({
+          where: { attempt: { examId: exam.id } },
+          _avg: { totalScore: true, percentage: true, accuracy: true },
+          _max: { totalScore: true },
+          _min: { totalScore: true },
+          _count: { id: true },
+        });
+
+        const totalAttempts = exam._count.attempts;
+        const totalEvaluated = scoreStats._count.id;
+        const distinctSubjects = [...new Set(formattedSections.map((s) => s.subject?.name).filter(Boolean))];
+
+        return {
+          id: exam.id,
+          title: exam.title,
+          description: exam.description,
+          examTarget: exam.examTarget?.name || 'General',
+          examTargetId: exam.examTargetId,
+          examDate: exam.examDate || schedule?.startTime || exam.startTime,
+          startTime: schedule?.startTime || exam.startTime,
+          endTime: schedule?.endTime || exam.endTime,
+          durationMinutes: exam.durationMinutes,
+          totalQuestions: exam.totalQuestions,
+          totalMarks: exam.totalMarks,
+          defaultMarksPerQuestion: exam.defaultMarksPerQuestion,
+          defaultNegativeMarks: exam.defaultNegativeMarks,
+          status: exam.status?.name || 'ENDED',
+          publicationStatus: pub?.status || (totalEvaluated > 0 ? 'READY_TO_PUBLISH' : 'NOT_READY'),
+          publishedAt: pub?.publishedAt || null,
+          subjects: distinctSubjects,
+          sections: formattedSections,
+          totalAttempts,
+          totalEvaluated,
+          averageScore: scoreStats._avg.totalScore ? Number(scoreStats._avg.totalScore).toFixed(1) : '0',
+          averagePercentage: scoreStats._avg.percentage ? Number(scoreStats._avg.percentage).toFixed(1) : '0',
+          averageAccuracy: scoreStats._avg.accuracy ? Number(scoreStats._avg.accuracy).toFixed(1) : '0',
+          highestScore: scoreStats._max.totalScore ?? 0,
+          lowestScore: scoreStats._min.totalScore ?? 0,
+        };
+      }),
+    );
+
+    return {
+      exams: items,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit) || 1,
+        hasMore: page * limit < total,
+      },
+    };
+  }
+
+  /**
+   * Returns complete granular details for a completed exam.
+   */
+  async getCompletedExamFullDetails(examId: string) {
+    const exam = await this.prisma.exam.findUnique({
+      where: { id: examId },
+      include: {
+        status: true,
+        examTarget: true,
+        createdBy: { select: { id: true, name: true, email: true } },
+        languages: {
+          include: {
+            language: { select: { id: true, name: true, code: true, nativeName: true } },
+          },
+        },
+        schedules: {
+          orderBy: { endTime: 'desc' },
+          take: 1,
+        },
+        sections: {
+          orderBy: { displayOrder: 'asc' },
+          include: {
+            subject: true,
+            examQuestions: {
+              include: {
+                question: {
+                  select: {
+                    id: true,
+                    chapter: { select: { id: true, name: true } },
+                    questionType: { select: { id: true, name: true, code: true } },
+                    marks: true,
+                    negativeMarks: true,
+                  },
+                },
+              },
+            },
+            _count: { select: { examQuestions: true } },
+          },
+        },
+        resultPublications: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          include: {
+            publishedBy: { select: { id: true, name: true, email: true } },
+          },
+        },
+        _count: {
+          select: {
+            attempts: true,
+            examQuestions: true,
+          },
+        },
+      },
+    });
+
+    if (!exam) {
+      throw new NotFoundException(`Exam with ID '${examId}' not found.`);
+    }
+
+    const schedule = exam.schedules?.[0];
+    const pub = exam.resultPublications?.[0];
+
+    // Chapters resolution
+    let thresholdData: any = null;
+    try {
+      if (typeof exam.performanceThresholds === 'string') {
+        thresholdData = JSON.parse(exam.performanceThresholds);
+      } else if (exam.performanceThresholds && typeof exam.performanceThresholds === 'object') {
+        thresholdData = exam.performanceThresholds;
+      }
+    } catch {
+      thresholdData = null;
+    }
+
+    const allConfiguredChapterIds: string[] = [];
+    if (thresholdData?.subjectGroups && Array.isArray(thresholdData.subjectGroups)) {
+      for (const group of thresholdData.subjectGroups) {
+        if (group.chapterIds && Array.isArray(group.chapterIds)) {
+          allConfiguredChapterIds.push(...group.chapterIds);
+        }
+      }
+    }
+
+    let dbConfiguredChapters: { id: string; name: string; subjectId: string }[] = [];
+    if (allConfiguredChapterIds.length > 0) {
+      dbConfiguredChapters = await this.prisma.chapter.findMany({
+        where: { id: { in: allConfiguredChapterIds } },
+        select: { id: true, name: true, subjectId: true },
+      });
+    }
+    const dbChapterMap = new Map<string, { id: string; name: string; subjectId: string }>();
+    dbConfiguredChapters.forEach((c) => dbChapterMap.set(c.id, c));
+
+    const sections = exam.sections.map((s) => {
+      const chapterNamesSet = new Set<string>();
+
+      s.examQuestions?.forEach((eq: any) => {
+        if (eq.question?.chapter?.name) {
+          chapterNamesSet.add(eq.question.chapter.name.trim());
+        }
+      });
+
+      if (thresholdData?.subjectGroups && Array.isArray(thresholdData.subjectGroups)) {
+        const matchedGroup = thresholdData.subjectGroups.find(
+          (g: any) => g.subjectId === s.subjectId,
+        );
+        if (matchedGroup && Array.isArray(matchedGroup.chapterIds)) {
+          for (const chId of matchedGroup.chapterIds) {
+            const ch = dbChapterMap.get(chId);
+            if (ch?.name) {
+              chapterNamesSet.add(ch.name.trim());
+            }
+          }
+        }
+      } else if (allConfiguredChapterIds.length > 0) {
+        dbConfiguredChapters
+          .filter((c) => c.subjectId === s.subjectId)
+          .forEach((c) => chapterNamesSet.add(c.name.trim()));
+      }
+
+      return {
+        id: s.id,
+        name: s.name,
+        displayOrder: s.displayOrder,
+        totalQuestions: s.totalQuestions || s._count?.examQuestions || 0,
+        marksPerQuestion: exam.defaultMarksPerQuestion,
+        negativeMarks: exam.defaultNegativeMarks,
+        subject: s.subject,
+        chapters: Array.from(chapterNamesSet),
+      };
+    });
+
+    const attempts = await this.prisma.attempt.findMany({
+      where: { examId },
+      include: {
+        status: true,
+        result: true,
+      },
+    });
+
+    const registeredCount = await this.prisma.student.count({
+      where: {
+        examTargetId: exam.examTargetId,
+        status: 'ACTIVE',
+      },
+    });
+
+    const totalAttended = attempts.length;
+    const submittedCount = attempts.filter((a) => a.status?.name === 'SUBMITTED').length;
+    const autoSubmittedCount = attempts.filter((a) => a.status?.name === 'AUTO_SUBMITTED').length;
+    const inProgressCount = attempts.filter((a) => a.status?.name === 'IN_PROGRESS').length;
+    const evaluatedCount = attempts.filter((a) => a.result !== null).length;
+
+    const resultAggregates = await this.prisma.result.aggregate({
+      where: { attempt: { examId } },
+      _avg: {
+        totalScore: true,
+        accuracy: true,
+        percentage: true,
+      },
+      _max: { totalScore: true },
+      _min: { totalScore: true },
+    });
+
+    return {
+      exam: {
+        id: exam.id,
+        title: exam.title,
+        description: exam.description,
+        examTarget: exam.examTarget,
+        status: exam.status?.name,
+        durationMinutes: exam.durationMinutes,
+        totalQuestions: exam.totalQuestions,
+        totalMarks: exam.totalMarks,
+        defaultMarksPerQuestion: exam.defaultMarksPerQuestion,
+        defaultNegativeMarks: exam.defaultNegativeMarks,
+        examDate: exam.examDate || schedule?.startTime || exam.startTime,
+        startTime: schedule?.startTime || exam.startTime,
+        endTime: schedule?.endTime || exam.endTime,
+        timezone: schedule?.timezone || 'Asia/Kolkata',
+        createdAt: exam.createdAt,
+        createdBy: exam.createdBy,
+        languages: exam.languages.map((l) => l.language || l),
+        schedule: schedule
+          ? {
+              id: schedule.id,
+              startTime: schedule.startTime,
+              endTime: schedule.endTime,
+              timezone: schedule.timezone,
+              status: schedule.status,
+              hasAnswerKey: schedule.hasAnswerKey,
+            }
+          : null,
+        sections,
+      },
+      participation: {
+        registered: Math.max(registeredCount, totalAttended),
+        attended: totalAttended,
+        submitted: submittedCount,
+        autoSubmitted: autoSubmittedCount,
+        inProgress: inProgressCount,
+        evaluated: evaluatedCount,
+      },
+      performance: {
+        averageScore: Number(resultAggregates._avg.totalScore || 0).toFixed(1),
+        averageAccuracy: Number(resultAggregates._avg.accuracy || 0).toFixed(1),
+        averagePercentage: Number(resultAggregates._avg.percentage || 0).toFixed(1),
+        highestScore: resultAggregates._max.totalScore || 0,
+        lowestScore: resultAggregates._min.totalScore || 0,
+      },
+      publication: {
+        status: pub?.status || (evaluatedCount > 0 ? 'READY_TO_PUBLISH' : 'NOT_READY'),
+        publishedAt: pub?.publishedAt || null,
+        publishedBy: pub?.publishedBy ? { name: pub.publishedBy.name, email: pub.publishedBy.email } : null,
+      },
+    };
+  }
+
+  /**
    * Returns list of all completed Live Exams, ordered by most recently completed first.
    */
   async getCompletedLiveExams() {

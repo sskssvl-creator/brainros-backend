@@ -27,6 +27,9 @@ describe('ResultProcessingMonitorService (Real-Time Job Monitoring & Observabili
     result: {
       update: jest.fn(),
     },
+    rankSnapshot: {
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
   };
 
   const mockRedis = {

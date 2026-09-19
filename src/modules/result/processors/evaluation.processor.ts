@@ -93,7 +93,7 @@ export class EvaluationProcessor extends WorkerHost {
       }
 
       // 3. Enqueue Next Stage: Analytics Worker
-      const analyticsJobId = `analytics_${attemptId}`;
+      const analyticsJobId = `analytics_${attemptId}_${Date.now()}`;
       await this.analyticsQueue.add(
         'RUN_ANALYTICS',
         {

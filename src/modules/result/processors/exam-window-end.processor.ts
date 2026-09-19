@@ -242,20 +242,29 @@ export class ExamWindowEndProcessor extends WorkerHost {
             },
           });
 
-          await this.evaluationQueue.add(
-            'EVALUATE_ATTEMPT',
-            {
-              attemptId: att.id,
-              triggeredAt: now.toISOString(),
-              evaluationMode: 'AUTOMATED_POST_WINDOW',
-            },
-            {
-              jobId: `eval_${att.id}`,
-              attempts: 3,
-              backoff: { type: 'exponential', delay: 2000 },
-              removeOnComplete: true,
-            },
-          );
+          let queueDispatched = false;
+          try {
+            const evalJobId = `eval_${att.id}_${Date.now()}`;
+            await this.evaluationQueue.add(
+              'EVALUATE_ATTEMPT',
+              {
+                attemptId: att.id,
+                triggeredAt: now.toISOString(),
+                evaluationMode: 'AUTOMATED_POST_WINDOW',
+              },
+              {
+                jobId: evalJobId,
+                attempts: 3,
+                backoff: { type: 'exponential', delay: 2000 },
+                removeOnComplete: true,
+              },
+            );
+            queueDispatched = true;
+          } catch (qErr: any) {
+            this.logger.warn(
+              `[ExamWindowEndWorker] Queue dispatch notice for attempt '${att.id}': ${qErr.message}`,
+            );
+          }
           enqueuedCount++;
         }
       }
