@@ -209,7 +209,7 @@ export class ResultController {
     'admin/exams/:examId/results/processing-status',
     'super-admin/exams/:examId/results/processing-status',
   ])
-  @Roles('ADMIN', 'SUPER_ADMIN', 'GENERAL_MANAGER')
+  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER')
   async getExamProcessingStatus(@Param('examId') examId: string) {
     const data = await this.readinessService.getExamProcessingDetails(examId);
     return {
@@ -227,7 +227,7 @@ export class ResultController {
     'super-admin/exams/:examId/results/processing-summary',
     'admin/exams/:examId/results/processing-summary',
   ])
-  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER')
+  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER')
   async getExamProcessingSummary(@Param('examId') examId: string) {
     const data = await this.monitorService.getExamProcessingSummary(examId);
     return {
@@ -245,7 +245,7 @@ export class ResultController {
     'super-admin/exams/:examId/results/processing-jobs',
     'admin/exams/:examId/results/processing-jobs',
   ])
-  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER')
+  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER')
   async getExamProcessingJobs(
     @Param('examId') examId: string,
     @Query() query: ExamProcessingJobsQueryDto,
@@ -266,7 +266,7 @@ export class ResultController {
     'super-admin/exams/:examId/results/processing-jobs/:jobId',
     'admin/exams/:examId/results/processing-jobs/:jobId',
   ])
-  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER')
+  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER')
   async getJobDetail(
     @Param('examId') examId: string,
     @Param('jobId') jobId: string,
@@ -287,7 +287,7 @@ export class ResultController {
     'super-admin/exams/:examId/results/processing-jobs/retry-failed',
     'admin/exams/:examId/results/processing-jobs/retry-failed',
   ])
-  @Roles('SUPER_ADMIN')
+  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER')
   async retryFailedJobs(
     @Param('examId') examId: string,
     @CurrentUser('id') userId: string,
@@ -308,7 +308,7 @@ export class ResultController {
     'super-admin/exams/:examId/results/processing-jobs/:jobId/retry',
     'admin/exams/:examId/results/processing-jobs/:jobId/retry',
   ])
-  @Roles('SUPER_ADMIN')
+  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER')
   async retrySingleJob(
     @Param('examId') examId: string,
     @Param('jobId') jobId: string,

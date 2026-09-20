@@ -398,6 +398,71 @@ export class JobProgressService {
             return event;
           }
         }
+
+        if (
+          queue === 'schools-bulk-upload' ||
+          queue === 'student-bulk-registration' ||
+          queue === 'students-bulk-upload' ||
+          queue.includes('bulk')
+        ) {
+          const upload = await this.prisma.bulkUpload.findUnique({
+            where: { id: jobId },
+          });
+          if (upload) {
+            const total = upload.validRowCount || upload.rowCount || 1;
+            const current = (upload.activatedCount || 0) + (upload.failedCount || 0);
+            const percentage = Math.min(100, Math.round((current / total) * 100));
+            const status: JobStatus =
+              upload.status === 'ACTIVATED' || upload.status === 'READY_FOR_REVIEW'
+                ? 'COMPLETED'
+                : upload.status === 'FAILED'
+                ? 'FAILED'
+                : upload.status === 'ACTIVATING' || upload.status === 'VALIDATING'
+                ? 'PROCESSING'
+                : 'QUEUED';
+
+            const event: JobProgressEventDto = {
+              event:
+                status === 'COMPLETED'
+                  ? 'job.completed'
+                  : status === 'FAILED'
+                  ? 'job.failed'
+                  : status === 'PROCESSING'
+                  ? 'job.progress'
+                  : 'job.queued',
+              job: {
+                queue,
+                jobId,
+                type: upload.uploadType || 'Bulk Upload Processing',
+                status,
+                stage:
+                  status === 'COMPLETED'
+                    ? 'COMPLETED'
+                    : status === 'FAILED'
+                    ? 'FAILED'
+                    : upload.status === 'ACTIVATING'
+                    ? 'ACTIVATING_RECORDS'
+                    : 'VALIDATING',
+                userId: upload.uploadedById,
+                institutionId: upload.institutionId || undefined,
+              },
+              progress: {
+                current,
+                total,
+                percentage,
+              },
+              message:
+                status === 'COMPLETED'
+                  ? `Completed processing (${current}/${total} records).`
+                  : status === 'FAILED'
+                  ? (upload.rejectionReason || 'Bulk upload failed.')
+                  : `Processing ${current} of ${total} records (${percentage}%)...`,
+              timestamp: upload.updatedAt ? upload.updatedAt.toISOString() : new Date().toISOString(),
+            };
+            this.statusCache.set(cacheKey, event);
+            return event;
+          }
+        }
       } catch (err: any) {
         this.logger.debug(`Failed database lookup for job ${queue}:${jobId}: ${err?.message}`);
       }

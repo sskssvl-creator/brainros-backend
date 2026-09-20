@@ -5,6 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import * as bcrypt from 'bcrypt';
 import {
   CreateSchoolDto,
   UpdateSchoolDto,
@@ -32,14 +33,24 @@ export class AdminSchoolsService {
       throw new BadRequestException(`School code '${trimmedCode}' already exists.`);
     }
 
+    let rawPhone = (dto.phone || '').trim();
+    if (rawPhone && !rawPhone.startsWith('+')) {
+      const digits = rawPhone.replace(/\D/g, '');
+      if (digits.length === 10) {
+        rawPhone = `+91${digits}`;
+      } else if (digits.length === 12 && digits.startsWith('91')) {
+        rawPhone = `+${digits}`;
+      }
+    }
+
     const school = await this.prisma.institution.create({
       data: {
         name: dto.name.trim(),
         code: trimmedCode,
         type: 'SCHOOL',
         status: 'ACTIVE',
-        email: dto.email?.trim() || null,
-        phone: dto.phone?.trim() || null,
+        email: dto.email?.trim().toLowerCase() || null,
+        phone: rawPhone || null,
         address: dto.address?.trim() || null,
         city: dto.city?.trim() || null,
         state: dto.state?.trim() || null,
@@ -53,6 +64,92 @@ export class AdminSchoolsService {
         districtRef: true,
       },
     });
+
+    // If phone is provided, create/link User account with INSTITUTION_ADMIN role for login
+    if (rawPhone) {
+      const tenDigit = rawPhone.replace(/^\+91/, '');
+      let schoolUser = await this.prisma.user.findFirst({
+        where: {
+          OR: [
+            { phone: rawPhone },
+            { mobileNumber: rawPhone },
+            { phone: tenDigit },
+            { mobileNumber: tenDigit },
+            ...(dto.email ? [{ email: dto.email.trim().toLowerCase() }] : []),
+          ],
+        },
+      });
+
+      if (!schoolUser) {
+        const tempPassword = await bcrypt.hash(`brainros_${rawPhone.slice(-6)}`, 10);
+        schoolUser = await this.prisma.user.create({
+          data: {
+            phone: rawPhone,
+            mobileNumber: rawPhone,
+            email: dto.email?.trim().toLowerCase() || null,
+            name: `${dto.name.trim()} Admin`,
+            passwordHash: tempPassword,
+            status: 'ACTIVE',
+            isActive: true,
+            isVerified: true,
+          },
+        });
+      } else {
+        schoolUser = await this.prisma.user.update({
+          where: { id: schoolUser.id },
+          data: {
+            status: 'ACTIVE',
+            isActive: true,
+            isVerified: true,
+          },
+        });
+      }
+
+      const instRole = await this.prisma.role.findFirst({
+        where: { name: 'INSTITUTION_ADMIN' },
+      });
+
+      if (instRole && schoolUser) {
+        await this.prisma.userRole.upsert({
+          where: {
+            userId_roleId: {
+              userId: schoolUser.id,
+              roleId: instRole.id,
+            },
+          },
+          update: {},
+          create: {
+            userId: schoolUser.id,
+            roleId: instRole.id,
+          },
+        });
+      }
+
+      if (schoolUser) {
+        const existingAdmin = await this.prisma.institutionAdmin.findFirst({
+          where: {
+            institutionId: school.id,
+            userId: schoolUser.id,
+          },
+        });
+
+        if (!existingAdmin) {
+          await this.prisma.institutionAdmin.create({
+            data: {
+              institutionId: school.id,
+              userId: schoolUser.id,
+              role: 'ADMIN',
+              isActive: true,
+            },
+          });
+        } else if (!existingAdmin.isActive) {
+          await this.prisma.institutionAdmin.update({
+            where: { id: existingAdmin.id },
+            data: { isActive: true },
+          });
+        }
+      }
+    }
 
     this.logger.log(
       `School created: ${school.name} (${school.code}) by user ${actorUserId}`,

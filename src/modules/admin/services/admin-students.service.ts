@@ -50,13 +50,32 @@ export class AdminStudentsService {
 
     // Apply institution scope if regular admin is bound to specific institutions
     if (!isSuperAdmin && assignedInstitutionIds.length > 0) {
-      where.batchMemberships = {
-        some: {
-          batch: {
-            institutionId: { in: assignedInstitutionIds },
-          },
+      const scopeInstitutions = await this.prisma.institution.findMany({
+        where: { id: { in: assignedInstitutionIds } },
+        select: { id: true, name: true },
+      });
+      const scopeNames = scopeInstitutions.map((i) => i.name).filter(Boolean);
+
+      where.AND = [
+        ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+        {
+          OR: [
+            { institutionId: { in: assignedInstitutionIds } },
+            {
+              batchMemberships: {
+                some: {
+                  batch: {
+                    institutionId: { in: assignedInstitutionIds },
+                  },
+                },
+              },
+            },
+            ...(scopeNames.length > 0
+              ? [{ schoolCollege: { in: scopeNames, mode: 'insensitive' as Prisma.QueryMode } }]
+              : []),
+          ],
         },
-      };
+      ];
     }
 
     // 2. Build Filter Criteria
@@ -102,14 +121,62 @@ export class AdminStudentsService {
       }
     }
 
-    if (query.institutionId) {
-      where.batchMemberships = {
-        some: {
-          batch: {
-            institutionId: query.institutionId,
+    if (query.institutionId && query.institutionId.toUpperCase() !== 'ALL') {
+      const isUuid = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(
+        query.institutionId,
+      );
+
+      let institutionName: string | null = null;
+      if (isUuid) {
+        const instRecord = await this.prisma.institution.findUnique({
+          where: { id: query.institutionId },
+          select: { name: true },
+        });
+        if (instRecord) {
+          institutionName = instRecord.name;
+        }
+      } else {
+        institutionName = query.institutionId;
+      }
+
+      const instConditions: Prisma.StudentWhereInput[] = [];
+
+      if (isUuid) {
+        instConditions.push({ institutionId: query.institutionId });
+        instConditions.push({
+          batchMemberships: {
+            some: {
+              batch: {
+                institutionId: query.institutionId,
+              },
+            },
           },
-        },
-      };
+        });
+      }
+
+      if (institutionName) {
+        instConditions.push({
+          schoolCollege: { contains: institutionName, mode: 'insensitive' as Prisma.QueryMode },
+        });
+        instConditions.push({
+          batchMemberships: {
+            some: {
+              batch: {
+                institution: {
+                  name: { contains: institutionName, mode: 'insensitive' as Prisma.QueryMode },
+                },
+              },
+            },
+          },
+        });
+      }
+
+      if (instConditions.length > 0) {
+        where.AND = [
+          ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+          { OR: instConditions },
+        ];
+      }
     }
 
     if (query.createdFrom || query.createdTo) {

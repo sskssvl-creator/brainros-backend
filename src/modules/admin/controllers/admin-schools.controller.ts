@@ -98,6 +98,24 @@ export class AdminSchoolsController {
   }
 
   /**
+   * GET /admin/schools/bulk-history
+   * Get paginated school bulk upload history
+   */
+  @Get('bulk-history')
+  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER', 'OPERATOR')
+  async getUploadHistory(
+    @Query('page') page = 1,
+    @Query('limit') limit = 10,
+    @Query('status') status?: string,
+  ) {
+    return this.bulkUploadService.getUploadHistory(
+      Number(page) || 1,
+      Number(limit) || 10,
+      status,
+    );
+  }
+
+  /**
    * GET /admin/schools/bulk-upload/:id/preview
    * Get preview and validation errors for uploaded batch
    */

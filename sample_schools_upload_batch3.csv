@@ -1,0 +1,6 @@
+School Name *,School Code * (e.g. SCH-001 or UDISE),Email Address (Optional),Phone Number (Optional),State (Optional),City / District (Optional),Address (Optional),Status (Optional - Default: ACTIVE)
+Dhirubhai Ambani International School,DAIS-MUM-301,admissions@dais.test,9830011223,Maharashtra,Mumbai,"Bandra Kurla Complex, Bandra East",ACTIVE
+The Doon School,DOON-DDN-302,admin@doonschool.test,9830022334,Uttarakhand,Dehradun,"Mall Road, Dehradun",ACTIVE
+La Martiniere for Boys,LMB-KOL-303,office@lamartiniere.test,9830033445,West Bengal,Kolkata,11 Dr. U.N. Brahmachari Street,ACTIVE
+Sanskriti School,SAN-DEL-304,principal@sanskritischool.test,9830044556,Delhi,New Delhi,"Chanakyapuri, New Delhi",ACTIVE
+Chettinad Vidyashram,CV-CHE-305,info@chettinadvidya.test,9830055667,Tamil Nadu,Chennai,"R.A. Puram, Chennai",ACTIVE

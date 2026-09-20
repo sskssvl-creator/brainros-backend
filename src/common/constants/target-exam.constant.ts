@@ -143,14 +143,19 @@ export function normalizeTargetExamInput(rawInput?: string | null): CanonicalTar
     return 'JEE + NEET + State CET';
   }
 
-  // 3. Parse segments separated strictly by '+' or '&'
-  if (trimmed.includes('+') || trimmed.includes('&')) {
+  // 3. Parse segments separated by '+', '&', ',', or '/'
+  if (
+    trimmed.includes('+') ||
+    trimmed.includes('&') ||
+    trimmed.includes(',') ||
+    trimmed.includes('/')
+  ) {
     const rawTokens = trimmed
-      .split(/[+&]/)
+      .split(/[+&,/]/)
       .map((t) => t.trim())
       .filter(Boolean);
 
-    // If any token is empty or invalid, fail
+    // If token length is out of range, fail
     if (rawTokens.length < 2 || rawTokens.length > 3) {
       return null;
     }
@@ -161,18 +166,22 @@ export function normalizeTargetExamInput(rawInput?: string | null): CanonicalTar
 
     for (const token of rawTokens) {
       const tLower = token.toLowerCase();
-      if (tLower === 'jee' || tLower === 'jee main' || tLower === 'iit jee') {
+      if (tLower === 'jee' || tLower === 'jee main' || tLower === 'iit jee' || tLower === 'iit-jee') {
         hasJee = true;
-      } else if (tLower === 'neet' || tLower === 'neet ug') {
+      } else if (tLower === 'neet' || tLower === 'neet ug' || tLower === 'neet-ug') {
         hasNeet = true;
       } else if (
+        tLower === 'cet' ||
         tLower === 'state cet' ||
         tLower === 'state-cet' ||
-        tLower === 'state_cet'
+        tLower === 'state_cet' ||
+        tLower === 'mht cet' ||
+        tLower === 'mht-cet' ||
+        tLower === 'kcet' ||
+        tLower === 'gujcet'
       ) {
         hasStateCet = true;
       } else {
-        // "CET" without "State" in a combo is strictly rejected as per user rules ("JEE + CET" -> invalid)
         return null;
       }
     }

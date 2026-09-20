@@ -1,0 +1,6 @@
+Full Name *,Mobile Number * (10 Digits),Email Address (Optional),State *,City / District *,"Class / Grade * (e.g. 11th, 12th, Dropper)","Exam Target * (Options: JEE, CET, NEET, NEET + JEE, NEET + State CET, JEE + State CET, JEE + NEET + State CET)","Preferred Language * (e.g. ENGLISH, HINDI, GUJARATI)"
+Aarav Joshi,9823456781,aarav.joshi@example.com,Karnataka,Bengaluru Urban,Class 12,JEE,English
+Sneha Kulkarni,9823456782,sneha.k@example.com,Maharashtra,Pune,Class 12,NEET,English
+Tanmay Deshmukh,9823456783,tanmay.d@example.com,Maharashtra,Mumbai,Class 11,CET,Marathi
+Ananya Iyer,9823456784,ananya.iyer@example.com,Tamil Nadu,Chennai,Class 12,NEET + JEE,English
+Rohan Mehta,9823456785,rohan.mehta@example.com,Gujarat,Ahmedabad,Dropper,JEE + State CET,Gujarati

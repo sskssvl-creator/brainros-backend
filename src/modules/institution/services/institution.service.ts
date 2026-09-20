@@ -187,21 +187,29 @@ export class InstitutionService {
       throw new NotFoundException(`User '${dto.userId}' not found.`);
     }
 
-    return this.prisma.institutionAdmin.upsert({
+    const existingAdmin = await this.prisma.institutionAdmin.findFirst({
       where: {
-        institutionId_userId: {
-          institutionId,
-          userId: dto.userId,
-        },
-      },
-      update: {
-        role: dto.role || 'ADMIN',
-        isActive: true,
-      },
-      create: {
         institutionId,
         userId: dto.userId,
+      },
+    });
+
+    if (!existingAdmin) {
+      return this.prisma.institutionAdmin.create({
+        data: {
+          institutionId,
+          userId: dto.userId,
+          role: dto.role || 'ADMIN',
+          isActive: true,
+        },
+      });
+    }
+
+    return this.prisma.institutionAdmin.update({
+      where: { id: existingAdmin.id },
+      data: {
         role: dto.role || 'ADMIN',
+        isActive: true,
       },
     });
   }

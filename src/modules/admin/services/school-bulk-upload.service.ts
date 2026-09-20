@@ -9,6 +9,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { JobProgressService } from '../../job-progress/services/job-progress.service';
 import * as ExcelJS from 'exceljs';
 import * as path from 'path';
+import * as bcrypt from 'bcrypt';
 
 const ALLOWED_EXTENSIONS = ['.csv', '.xlsx', '.xls'];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
@@ -434,6 +435,59 @@ export class SchoolBulkUploadService {
   }
 
   /**
+   * Get paginated school bulk upload history
+   */
+  async getUploadHistory(page = 1, limit = 10, status?: string) {
+    const skip = (Math.max(1, page) - 1) * limit;
+    const where: any = { uploadType: 'SCHOOLS' };
+    if (status && status !== 'ALL') {
+      where.status = status;
+    }
+
+    const [uploads, total] = await Promise.all([
+      this.prisma.bulkUpload.findMany({
+        where,
+        skip,
+        take: Math.max(1, limit),
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.bulkUpload.count({ where }),
+    ]);
+
+    const uploaderIds = Array.from(new Set(uploads.map((u) => u.uploadedById).filter(Boolean)));
+    const users = uploaderIds.length > 0
+      ? await this.prisma.user.findMany({
+          where: { id: { in: uploaderIds } },
+          select: { id: true, name: true, email: true, phone: true },
+        })
+      : [];
+    const userMap = new Map(users.map((u) => [u.id, u]));
+
+    return {
+      uploads: uploads.map((u) => ({
+        id: u.id,
+        fileName: u.fileName,
+        fileSize: u.fileSize,
+        status: u.status,
+        rowCount: u.rowCount,
+        validRowCount: u.validRowCount,
+        invalidRowCount: u.invalidRowCount,
+        duplicateRowCount: u.duplicateRowCount,
+        activatedCount: u.activatedCount,
+        createdAt: u.createdAt,
+        activatedAt: u.activatedAt,
+        uploadedBy: userMap.get(u.uploadedById) || { id: u.uploadedById, name: 'Admin', email: null, phone: null },
+      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  /**
    * Confirm and register valid schools in the batch.
    * - SUPER_ADMIN / ADMIN: activates directly.
    * - OPERATOR: routes to PENDING_APPROVAL and creates an ApprovalRequest.
@@ -534,15 +588,24 @@ export class SchoolBulkUploadService {
       try {
         const validStatuses = ['ACTIVE', 'INACTIVE', 'DRAFT', 'SUSPENDED'];
         const schoolStatus = validStatuses.includes(data.status) ? data.status : 'ACTIVE';
+        let rawPhone = (data.phone || data.phoneNumber || '').toString().trim();
+        if (rawPhone && !rawPhone.startsWith('+')) {
+          const digits = rawPhone.replace(/\D/g, '');
+          if (digits.length === 10) {
+            rawPhone = `+91${digits}`;
+          } else if (digits.length === 12 && digits.startsWith('91')) {
+            rawPhone = `+${digits}`;
+          }
+        }
 
-        await this.prisma.institution.create({
+        const school = await this.prisma.institution.create({
           data: {
             name: data.name,
             code: data.code,
             type: 'SCHOOL',
             status: schoolStatus,
-            email: data.email || null,
-            phone: data.phone || data.phoneNumber || null,
+            email: data.email?.trim().toLowerCase() || null,
+            phone: rawPhone || null,
             state: data.state || null,
             city: data.city || null,
             address: data.address || null,
@@ -550,6 +613,92 @@ export class SchoolBulkUploadService {
             createdById: actor.userId,
           },
         });
+
+        // If phone is provided, create/link User account with INSTITUTION_ADMIN role for login
+        if (rawPhone) {
+          const tenDigit = rawPhone.replace(/^\+91/, '');
+          let schoolUser = await this.prisma.user.findFirst({
+            where: {
+              OR: [
+                { phone: rawPhone },
+                { mobileNumber: rawPhone },
+                { phone: tenDigit },
+                { mobileNumber: tenDigit },
+                ...(data.email ? [{ email: data.email.trim().toLowerCase() }] : []),
+              ],
+            },
+          });
+
+          if (!schoolUser) {
+            const tempPassword = await bcrypt.hash(`brainros_${rawPhone.slice(-6)}`, 10);
+            schoolUser = await this.prisma.user.create({
+              data: {
+                phone: rawPhone,
+                mobileNumber: rawPhone,
+                email: data.email?.trim().toLowerCase() || null,
+                name: `${data.name} Admin`,
+                passwordHash: tempPassword,
+                status: 'ACTIVE',
+                isActive: true,
+                isVerified: true,
+              },
+            });
+          } else {
+            schoolUser = await this.prisma.user.update({
+              where: { id: schoolUser.id },
+              data: {
+                status: 'ACTIVE',
+                isActive: true,
+                isVerified: true,
+              },
+            });
+          }
+
+          const instRole = await this.prisma.role.findFirst({
+            where: { name: 'INSTITUTION_ADMIN' },
+          });
+
+          if (instRole && schoolUser) {
+            await this.prisma.userRole.upsert({
+              where: {
+                userId_roleId: {
+                  userId: schoolUser.id,
+                  roleId: instRole.id,
+                },
+              },
+              update: {},
+              create: {
+                userId: schoolUser.id,
+                roleId: instRole.id,
+              },
+            });
+          }
+
+          if (schoolUser) {
+            const existingAdmin = await this.prisma.institutionAdmin.findFirst({
+              where: {
+                institutionId: school.id,
+                userId: schoolUser.id,
+              },
+            });
+
+            if (!existingAdmin) {
+              await this.prisma.institutionAdmin.create({
+                data: {
+                  institutionId: school.id,
+                  userId: schoolUser.id,
+                  role: 'ADMIN',
+                  isActive: true,
+                },
+              });
+            } else if (!existingAdmin.isActive) {
+              await this.prisma.institutionAdmin.update({
+                where: { id: existingAdmin.id },
+                data: { isActive: true },
+              });
+            }
+          }
+        }
 
         await this.prisma.bulkUploadRow.update({
           where: { id: row.id },

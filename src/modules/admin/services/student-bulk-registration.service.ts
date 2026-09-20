@@ -144,12 +144,22 @@ export class StudentBulkRegistrationService {
         examTarget: 'JEE',
         preferredLanguage: 'ENGLISH',
       },
+      {
+        name: 'Sneha Kulkarni',
+        mobile: '9876543214',
+        email: 'sneha.k@example.com',
+        state: 'Maharashtra',
+        city: 'Pune',
+        class: 'Dropper',
+        examTarget: 'NEET',
+        preferredLanguage: 'MARATHI',
+      },
     ];
 
     sampleRows.forEach((row) => sheet.addRow(row));
 
     // Style data rows
-    for (let r = 2; r <= 4; r++) {
+    for (let r = 2; r <= sampleRows.length + 1; r++) {
       const row = sheet.getRow(r);
       row.height = 22;
       row.eachCell((cell) => {
@@ -202,10 +212,10 @@ export class StudentBulkRegistrationService {
         if (val.includes('name') && !val.includes('state') && !val.includes('school')) headerMap.set(colNumber, 'name');
         else if (val.includes('mobile') || val.includes('phone')) headerMap.set(colNumber, 'mobile');
         else if (val.includes('email')) headerMap.set(colNumber, 'email');
+        else if (val.includes('target') || val.includes('exam')) headerMap.set(colNumber, 'examTarget');
         else if (val.includes('state')) headerMap.set(colNumber, 'state');
         else if (val.includes('city') || val.includes('district')) headerMap.set(colNumber, 'city');
         else if (val.includes('class') || val.includes('grade')) headerMap.set(colNumber, 'class');
-        else if (val.includes('target') || val.includes('exam')) headerMap.set(colNumber, 'examTarget');
         else if (val.includes('lang')) headerMap.set(colNumber, 'preferredLanguage');
         // Legacy school_name/school/college columns in file are ignored - UI selected school is source of truth
       });
@@ -269,10 +279,10 @@ export class StudentBulkRegistrationService {
         if (val.includes('name') && !val.includes('state') && !val.includes('school')) headerMap.set(idx, 'name');
         else if (val.includes('mobile') || val.includes('phone')) headerMap.set(idx, 'mobile');
         else if (val.includes('email')) headerMap.set(idx, 'email');
+        else if (val.includes('target') || val.includes('exam')) headerMap.set(idx, 'examTarget');
         else if (val.includes('state')) headerMap.set(idx, 'state');
         else if (val.includes('city') || val.includes('district')) headerMap.set(idx, 'city');
         else if (val.includes('class') || val.includes('grade')) headerMap.set(idx, 'class');
-        else if (val.includes('target') || val.includes('exam')) headerMap.set(idx, 'examTarget');
         else if (val.includes('lang')) headerMap.set(idx, 'preferredLanguage');
         // Legacy school_name/school/college columns in file are ignored - UI selected school is source of truth
       });
@@ -1031,10 +1041,19 @@ export class StudentBulkRegistrationService {
       orderBy: { rowNumber: 'asc' },
     });
 
+    if (this.jobProgressService && validRows.length > 0) {
+      await this.jobProgressService.publishStarted('student-bulk-registration', uploadId, {
+        type: 'STUDENT_BULK_REGISTRATION',
+        stage: 'ACTIVATING_STUDENTS',
+        userId: actor?.userId,
+        message: `Starting registration for ${validRows.length} students...`,
+      });
+    }
+
     let activated = 0;
     let failed = 0;
 
-    const CHUNK_SIZE = 50;
+    const CHUNK_SIZE = validRows.length <= 10 ? 1 : Math.min(25, Math.max(1, Math.floor(validRows.length / 20)));
     for (let i = 0; i < validRows.length; i += CHUNK_SIZE) {
       const chunk = validRows.slice(i, i + CHUNK_SIZE);
 
@@ -1211,6 +1230,25 @@ export class StudentBulkRegistrationService {
         activatedAt: new Date(),
       },
     });
+
+    if (this.jobProgressService) {
+      await this.jobProgressService.publishCompleted(
+        'student-bulk-registration',
+        uploadId,
+        {
+          message: `Bulk registration completed: ${activated} registered, ${failed} failed.`,
+          resultSummary: {
+            uploadId,
+            totalValid: validRows.length,
+            activated,
+            failed,
+            status: finalStatus,
+          },
+          totalProcessed: activated + failed,
+          userId: actor?.userId,
+        },
+      );
+    }
 
     if (actor?.userId) {
       await this.securityEventService.log('STUDENTS_BULK_IMPORTED' as any, {
@@ -1673,7 +1711,13 @@ export class StudentBulkRegistrationService {
       /^(11|11th|xi|class\s*11|class\s*11th|class\s*xi|11th\s*std|11th\s*standard|11th\s*grade|first\s*puc|1st\s*puc|puc\s*1|plus\s*1|\+1|fyjc|inter\s*1st)/i.test(raw) ||
       clean === '11' || clean === '11th' || clean === 'xi' || clean === 'class11' || clean === 'class11th' || clean === 'classxi'
     ) {
-      return classes.find((c) => c.name === 'CLASS_11') || classMap.get('class_11') || classMap.get('11th') || null;
+      return (
+        classes.find((c) => /11/i.test(c.name)) ||
+        classMap.get('class 11') ||
+        classMap.get('class_11') ||
+        classMap.get('11th') ||
+        null
+      );
     }
 
     // 3. Class 12 variations
@@ -1681,7 +1725,13 @@ export class StudentBulkRegistrationService {
       /^(12|12th|xii|class\s*12|class\s*12th|class\s*xii|12th\s*std|12th\s*standard|12th\s*grade|second\s*puc|2nd\s*puc|puc\s*2|plus\s*2|\+2|syjc|hsc|inter\s*2nd)/i.test(raw) ||
       clean === '12' || clean === '12th' || clean === 'xii' || clean === 'class12' || clean === 'class12th' || clean === 'classxii'
     ) {
-      return classes.find((c) => c.name === 'CLASS_12') || classMap.get('class_12') || classMap.get('12th') || null;
+      return (
+        classes.find((c) => /12/i.test(c.name)) ||
+        classMap.get('class 12') ||
+        classMap.get('class_12') ||
+        classMap.get('12th') ||
+        null
+      );
     }
 
     // 4. Dropper / Repeater variations
@@ -1689,7 +1739,11 @@ export class StudentBulkRegistrationService {
       /^(drop|dropper|repeat|repeater|long\s*term|longterm|13|13th|target)/i.test(raw) ||
       clean.includes('drop') || clean.includes('repeat')
     ) {
-      return classes.find((c) => c.name === 'DROPPER') || classMap.get('dropper') || null;
+      return (
+        classes.find((c) => /drop/i.test(c.name)) ||
+        classMap.get('dropper') ||
+        null
+      );
     }
 
     // 5. Foundation variations
@@ -1697,7 +1751,11 @@ export class StudentBulkRegistrationService {
       /^(foundation|9|9th|10|10th|ix|x|class\s*9|class\s*10|class\s*9th|class\s*10th)/i.test(raw) ||
       clean.includes('foundation')
     ) {
-      return classes.find((c) => c.name === 'FOUNDATION') || classMap.get('foundation') || null;
+      return (
+        classes.find((c) => /found/i.test(c.name)) ||
+        classMap.get('foundation') ||
+        null
+      );
     }
 
     // 6. Substring match fallback
@@ -1721,7 +1779,11 @@ export class StudentBulkRegistrationService {
     if (!normalized) return null;
 
     const targetRecord = examTargets.find(
-      (et) => et.name.toLowerCase().trim() === normalized.toLowerCase(),
+      (et) =>
+        et.name.toLowerCase().trim() === normalized.toLowerCase() ||
+        normalizeTargetExamInput(et.name)?.toLowerCase() === normalized.toLowerCase() ||
+        et.name.toLowerCase().replace(/\s*and\s*/g, ' + ') === normalized.toLowerCase() ||
+        et.name.toLowerCase().replace(/\s*\+\s*/g, ' and ') === normalized.toLowerCase(),
     );
     if (!targetRecord) return null;
 

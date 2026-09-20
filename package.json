@@ -27,7 +27,15 @@
     "prisma:generate": "npx prisma generate",
     "prisma:migrate:deploy": "npx prisma migrate deploy",
     "prisma:migrate:status": "npx prisma migrate status",
-    "prisma:migrate:prod": "npx dotenv-cli -e .env.production -- npx prisma migrate deploy"
+    "prisma:migrate:prod": "npx dotenv-cli -e .env.production -- npx prisma migrate deploy",
+    "db:truncate:prod": "npx ts-node scripts/truncate-db.ts",
+    "seed:roles": "npx ts-node prisma/seeders/seed-roles.ts",
+    "seed:classes": "npx ts-node prisma/seeders/seed-classes.ts",
+    "seed:targets": "npx ts-node prisma/seeders/seed-target-exams.ts",
+    "seed:languages": "npx ts-node prisma/seeders/seed-language.ts",
+    "seed:subjects": "npx ts-node prisma/seeders/seed-subjects-and-chapters.ts",
+    "seed:users": "npx ts-node prisma/seeders/seed-user.ts",
+    "rollback:users": "npx ts-node prisma/seeders/rollback-users.ts"
   },
   "engines": {
     "node": ">=18.0.0"

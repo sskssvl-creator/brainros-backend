@@ -1,0 +1,6 @@
+School Name *,School Code * (e.g. SCH-001 or UDISE),Email Address (Optional),Phone Number (Optional),State (Optional),City / District (Optional),Address (Optional),Status (Optional - Default: ACTIVE)
+The Mother's International School,MIS-DEL-201,principal@misdelhi.test,9820011223,Delhi,South Delhi,"Sri Aurobindo Marg, New Delhi",ACTIVE
+Bombay Scottish School,BSS-MUM-202,admin@bombayscottish.test,9820022334,Maharashtra,Mumbai,"Veer Savarkar Marg, Mahim",ACTIVE
+Bishop Cotton Boys' School,BCB-BLR-203,office@bishopcotton.test,9820033445,Karnataka,Bengaluru Urban,"St. Mark's Road, Bengaluru",ACTIVE
+Hyderabad Public School,HPS-HYD-204,contact@hpsbegumpet.test,9820044556,Telangana,Hyderabad,"1-11-87, Begumpet, Hyderabad",ACTIVE
+Modern High School for Girls,MHS-KOL-205,info@mhsforgirls.test,9820055667,West Bengal,Kolkata,"78 Syed Amir Ali Avenue, Kolkata",ACTIVE
