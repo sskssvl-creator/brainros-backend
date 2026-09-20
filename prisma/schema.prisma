@@ -362,6 +362,9 @@ model Student {
   @@index([examTargetId])
   @@index([classId])
   @@index([preferredLanguageId])
+  @@index([createdAt])
+  @@index([status, createdAt])
+  @@index([institutionId, createdAt])
   @@map("students")
 }
 
@@ -511,6 +514,7 @@ model SecurityEvent {
   @@index([userId])
   @@index([eventType])
   @@index([createdAt])
+  @@index([userId, createdAt])
   @@map("security_events")
 }
 
@@ -733,6 +737,8 @@ model Question {
   @@index([version])
   @@index([createdById])
   @@index([createdAt])
+  @@index([subjectId, chapterId])
+  @@index([status, createdAt])
   @@map("questions")
 }
 
@@ -936,6 +942,7 @@ model ExamSection {
   examQuestions  ExamQuestion[]
 
   @@index([examId])
+  @@index([subjectId])
   @@map("exam_sections")
 }
 
@@ -1046,6 +1053,8 @@ model Attempt {
   @@index([examVersionId])
   @@index([studentId, scheduleId])
   @@index([statusId, createdAt])
+  @@index([studentId, createdAt])
+  @@index([studentId, statusId])
   @@map("attempts")
 }
 
@@ -1615,6 +1624,7 @@ model ExamSchedule {
   @@index([endTime])
   @@index([scheduledById])
   @@index([status, startTime, endTime])
+  @@index([examId, status])
   @@map("exam_schedules")
 }
 
@@ -1723,6 +1733,7 @@ model CandidateRank {
   @@index([rankSnapshotId, rankType])
   @@index([rankSnapshotId, rankType, scopeId])
   @@index([rankSnapshotId, rankType, rank])
+  @@index([studentId, rankType])
   @@map("candidate_ranks")
 }
 
@@ -2125,6 +2136,8 @@ model Bill {
   @@index([status])
   @@index([billNumber])
   @@index([billingYear, billingMonth])
+  @@index([institutionId, status])
+  @@index([status, createdAt])
   @@map("bills")
 }
 
@@ -2643,6 +2656,9 @@ model Order {
   @@index([salesAgentId])
   @@index([status])
   @@index([createdAt])
+  @@index([userId, status])
+  @@index([studentId, status])
+  @@index([examId])
   @@map("orders")
 }
 
@@ -2709,6 +2725,8 @@ model PaymentTransaction {
 
   @@index([registrationId])
   @@index([status])
+  @@index([studentId])
+  @@index([userId])
   @@map("payment_transactions")
 }
 
@@ -2983,6 +3001,8 @@ model ExamAnalysisReport {
   @@index([examId])
   @@index([studentId])
   @@index([status])
+  @@index([studentId, status])
+  @@index([studentId, examId])
   @@map("exam_analysis_reports")
 }
 

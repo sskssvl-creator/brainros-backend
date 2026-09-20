@@ -86,25 +86,25 @@ export class ResultService {
       };
     }
 
-    // Fetch all exam questions with their correct answers
-    const examQuestions = await this.prisma.examQuestion.findMany({
-      where: { examId: attempt.examId },
-      include: {
-        question: {
-          include: {
-            questionType: true,
-            options: { select: { id: true, isCorrect: true } },
-            answer: true,
+    // Fetch all exam questions and student answers concurrently
+    const [examQuestions, answers] = await Promise.all([
+      this.prisma.examQuestion.findMany({
+        where: { examId: attempt.examId },
+        include: {
+          question: {
+            include: {
+              questionType: true,
+              options: { select: { id: true, isCorrect: true } },
+              answer: true,
+            },
           },
+          section: { select: { subjectId: true } },
         },
-        section: { select: { subjectId: true } },
-      },
-    });
-
-    // Fetch student answers
-    const answers = await this.prisma.answer.findMany({
-      where: { attemptId },
-    });
+      }),
+      this.prisma.answer.findMany({
+        where: { attemptId },
+      }),
+    ]);
     const answerMap = new Map(answers.map((a) => [a.examQuestionId, a]));
 
     // Map time logs
@@ -620,17 +620,18 @@ export class ResultService {
       }
     }
 
-    const result = await this.prisma.result.findUnique({
-      where: { attemptId },
-    });
-    if (!result) throw new NotFoundException('Result not found');
-
-    return this.prisma.subjectResult.findMany({
-      where: { resultId: result.id },
+    const results = await this.prisma.subjectResult.findMany({
+      where: { result: { attemptId } },
       include: {
         subject: { select: { id: true, name: true } },
       },
     });
+    if (results.length === 0) {
+      const resultExists = await this.prisma.result.count({ where: { attemptId } });
+      if (resultExists === 0) throw new NotFoundException('Result not found');
+    }
+
+    return results;
   }
 
   /**
@@ -644,13 +645,8 @@ export class ResultService {
       }
     }
 
-    const result = await this.prisma.result.findUnique({
-      where: { attemptId },
-    });
-    if (!result) throw new NotFoundException('Result not found');
-
-    return this.prisma.chapterResult.findMany({
-      where: { resultId: result.id },
+    const results = await this.prisma.chapterResult.findMany({
+      where: { result: { attemptId } },
       include: {
         chapter: {
           select: {
@@ -661,6 +657,12 @@ export class ResultService {
         },
       },
     });
+    if (results.length === 0) {
+      const resultExists = await this.prisma.result.count({ where: { attemptId } });
+      if (resultExists === 0) throw new NotFoundException('Result not found');
+    }
+
+    return results;
   }
 
   /**

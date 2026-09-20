@@ -546,17 +546,78 @@ export class ApprovalWorkflowService implements OnModuleInit {
       this.prisma.approvalRequest.count({ where }),
     ]);
 
-    // Batch enrich items with entity previews
-    const items = await Promise.all(
-      rawItems.map(async (item) => {
-        let entitySummary: any = null;
-        let requestedByEmail: string | undefined;
+    // ── Batch enrich items with entity previews (Zero N+1) ──
+    const userIds = Array.from(
+      new Set(rawItems.map((i) => i.requestedById).filter(Boolean)),
+    );
+    const examIds = Array.from(
+      new Set(
+        rawItems
+          .filter(
+            (i) =>
+              i.resourceType === 'EXAM' ||
+              i.resourceType === 'MOCK_TEST' ||
+              i.resourceType === 'MOCK',
+          )
+          .map((i) => i.resourceId)
+          .filter(Boolean),
+      ),
+    );
+    const questionIds = Array.from(
+      new Set(
+        rawItems
+          .filter((i) => i.resourceType === 'QUESTION')
+          .map((i) => i.resourceId)
+          .filter(Boolean),
+      ),
+    );
+    const studentIds = Array.from(
+      new Set(
+        rawItems
+          .filter((i) => i.resourceType === 'STUDENT')
+          .map((i) => i.resourceId)
+          .filter(Boolean),
+      ),
+    );
+    const bulkUploadIds = Array.from(
+      new Set(
+        rawItems
+          .filter((i) => i.resourceType === 'BULK_UPLOAD')
+          .map((i) => i.resourceId)
+          .filter(Boolean),
+      ),
+    );
+    const institutionIds = Array.from(
+      new Set(
+        rawItems
+          .filter((i) => i.resourceType === 'INSTITUTION')
+          .map((i) => i.resourceId)
+          .filter(Boolean),
+      ),
+    );
+    const billIds = Array.from(
+      new Set(
+        rawItems
+          .filter((i) => i.resourceType === 'BILL' || i.resourceType === 'BILLING')
+          .map((i) => i.resourceId)
+          .filter(Boolean),
+      ),
+    );
 
-        try {
-          // Fetch requester info
-          const user = await this.prisma.user.findUnique({
-            where: { id: item.requestedById },
+    const [
+      users,
+      exams,
+      questions,
+      students,
+      bulkUploads,
+      institutions,
+      bills,
+    ]: [any[], any[], any[], any[], any[], any[], any[]] = await Promise.all([
+      userIds.length > 0
+        ? this.prisma.user.findMany({
+            where: { id: { in: userIds } },
             select: {
+              id: true,
               name: true,
               email: true,
               phone: true,
@@ -564,170 +625,243 @@ export class ApprovalWorkflowService implements OnModuleInit {
               userRoles: { include: { role: true } },
               student: { select: { name: true } },
             },
-          });
-          const staffRole = user?.userRoles?.[0]?.role?.name || 'STAFF';
-          if (user) {
-            requestedByEmail = user.name || user.student?.name || user.email || user.mobileNumber || user.phone || 'Staff';
-          }
-
-          if (item.resourceType === 'STAFF_UPDATE') {
-            const meta = (item.metadata as any) || {};
-            entitySummary = {
-              staffMember: requestedByEmail || 'Staff',
-              role: staffRole,
-              entityType: meta.entityType || 'ENTITY',
-              entityId: item.resourceId,
-              currentValue: meta.currentValue || null,
-              proposedValue: meta.proposedValue || null,
-              reason: meta.reason || item.rejectionReason || 'Staff update request',
-              submittedAt: item.submittedAt || item.createdAt,
-              status: item.status,
-            };
-          } else if (item.resourceType === 'EXAM' || item.resourceType === 'MOCK_TEST' || item.resourceType === 'MOCK') {
-            const exam = await this.prisma.exam.findUnique({
-              where: { id: item.resourceId },
-              include: {
-                examTarget: { select: { name: true } },
-                status: { select: { name: true } },
-                sections: { include: { subject: { select: { name: true } } } },
-                schedules: {
-                  where: { status: { in: ['SCHEDULED', 'ACTIVE'] } },
-                  orderBy: { createdAt: 'desc' },
-                  take: 1,
-                },
-                _count: { select: { examQuestions: true } },
+          })
+        : ([] as any[]),
+      examIds.length > 0
+        ? this.prisma.exam.findMany({
+            where: { id: { in: examIds } },
+            include: {
+              examTarget: { select: { name: true } },
+              status: { select: { name: true } },
+              sections: { include: { subject: { select: { name: true } } } },
+              schedules: {
+                where: { status: { in: ['SCHEDULED', 'ACTIVE'] } },
+                orderBy: { createdAt: 'desc' },
+                take: 1,
               },
-            });
-            if (exam) {
-              const activeSchedule = exam.schedules?.[0];
-              const isMock =
-                item.resourceType === 'MOCK_TEST' ||
-                exam.title.toUpperCase().includes('MOCK') ||
-                exam.title.toUpperCase().includes('PRACTICE') ||
-                (exam.sections && exam.sections.length === 1);
+              _count: { select: { examQuestions: true } },
+            },
+          })
+        : ([] as any[]),
+      questionIds.length > 0
+        ? this.prisma.question.findMany({
+            where: { id: { in: questionIds } },
+            include: {
+              subject: { select: { name: true } },
+              translations: { select: { questionText: true }, take: 1 },
+            },
+          })
+        : ([] as any[]),
+      studentIds.length > 0
+        ? this.prisma.student.findMany({
+            where: { id: { in: studentIds } },
+            include: {
+              studentClass: { select: { name: true } },
+              examTarget: { select: { name: true } },
+              institution: { select: { name: true, code: true } },
+            },
+          })
+        : ([] as any[]),
+      bulkUploadIds.length > 0
+        ? this.prisma.bulkUpload.findMany({
+            where: { id: { in: bulkUploadIds } },
+            include: { institution: { select: { name: true, code: true } } },
+          })
+        : ([] as any[]),
+      institutionIds.length > 0
+        ? this.prisma.institution.findMany({
+            where: { id: { in: institutionIds } },
+          })
+        : ([] as any[]),
+      billIds.length > 0
+        ? this.prisma.bill.findMany({
+            where: { id: { in: billIds } },
+            include: { institution: { select: { name: true, code: true } } },
+          })
+        : ([] as any[]),
+    ]);
 
-              entitySummary = {
-                id: exam.id,
-                title: exam.title,
-                targetExam: exam.examTarget?.name || 'General',
-                totalQuestions: exam.totalQuestions || exam._count.examQuestions || 0,
-                durationMinutes: exam.durationMinutes || 60,
-                totalMarks: exam.totalMarks || 0,
-                subjects: exam.sections.map((s) => s.subject.name),
-                status: exam.status?.name,
-                isMock,
-                scheduleId: activeSchedule?.id,
-                startTime: activeSchedule?.startTime
-                  ? activeSchedule.startTime.toISOString()
-                  : null,
-                endTime: activeSchedule?.endTime
-                  ? activeSchedule.endTime.toISOString()
-                  : null,
-              };
-            }
-          } else if (item.resourceType === 'QUESTION') {
-            const question = await this.prisma.question.findUnique({
-              where: { id: item.resourceId },
-              include: {
-                subject: { select: { name: true } },
-                translations: { select: { questionText: true }, take: 1 },
-              },
-            });
-            if (question) {
-              entitySummary = {
-                id: question.id,
-                title:
-                  question.translations?.[0]?.questionText?.substring(0, 100) ||
-                  `Question ${question.id.substring(0, 8)}`,
-                subject: question.subject?.name,
-              };
-            }
-          } else if (item.resourceType === 'STUDENT') {
-            const meta = (item.metadata as any) || {};
-            const student = await this.prisma.student.findUnique({
-              where: { id: item.resourceId },
-              include: {
-                studentClass: { select: { name: true } },
-                examTarget: { select: { name: true } },
-                institution: { select: { name: true, code: true } },
-              },
-            }).catch(() => null);
+    const userMap = new Map<string, any>(users.map((u: any) => [u.id, u]));
+    const examMap = new Map<string, any>(exams.map((e: any) => [e.id, e]));
+    const questionMap = new Map<string, any>(questions.map((q: any) => [q.id, q]));
+    const studentMap = new Map<string, any>(students.map((s: any) => [s.id, s]));
+    const bulkUploadMap = new Map<string, any>(bulkUploads.map((b: any) => [b.id, b]));
+    const institutionMap = new Map<string, any>(institutions.map((i: any) => [i.id, i]));
+    const billMap = new Map<string, any>(bills.map((b: any) => [b.id, b]));
 
-            entitySummary = {
-              id: item.resourceId,
-              title: student?.name || meta.name || 'Student Registration',
-              studentId: student?.studentId || meta.studentId || 'N/A',
-              studentCode: student?.studentCode || meta.studentCode || 'N/A',
-              schoolName: student?.schoolCollege || student?.institution?.name || meta.schoolCollege || 'School / College',
-              city: student?.district || meta.district || 'N/A',
-              state: student?.state || meta.state || 'N/A',
-              grade: student?.studentClass?.name || meta.grade || 'N/A',
-              targetExam: student?.examTarget?.name || meta.targetExam || meta.examTarget || 'General',
-              mobile: meta.mobile || meta.phone || 'N/A',
-              email: meta.email || 'N/A',
-            };
-          } else if (item.resourceType === 'BULK_UPLOAD') {
-            const meta = (item.metadata as any) || {};
-            const upload = await this.prisma.bulkUpload.findUnique({
-              where: { id: item.resourceId },
-              include: { institution: { select: { name: true, code: true } } },
-            }).catch(() => null);
+    const items = rawItems.map((item) => {
+      let entitySummary: any = null;
+      let requestedByEmail: string | undefined;
 
-            entitySummary = {
-              id: item.resourceId,
-              title: upload?.fileName || meta.fileName || `Student Bulk Import (${upload?.validRowCount ?? meta.validRowCount ?? 0} Students)`,
-              schoolName: upload?.institution?.name || meta.schoolName || 'Institution Roster',
-              validRowCount: upload?.validRowCount ?? meta.validRowCount ?? 0,
-              invalidRowCount: upload?.invalidRowCount ?? meta.invalidRowCount ?? 0,
-              batchId: upload?.batchId || meta.batchId || null,
-            };
-          } else if (item.resourceType === 'INSTITUTION') {
-            const meta = (item.metadata as any) || {};
-            const inst = await this.prisma.institution.findUnique({
-              where: { id: item.resourceId },
-            }).catch(() => null);
-
-            entitySummary = {
-              id: item.resourceId,
-              title: inst?.name || meta.name || `School Onboarding (${meta.code || 'Registration'})`,
-              code: inst?.code || meta.code || 'N/A',
-              city: inst?.city || meta.city || 'N/A',
-              state: inst?.state || meta.state || 'N/A',
-              type: inst?.type || meta.type || 'SCHOOL',
-            };
-          } else if (item.resourceType === 'BILL' || item.resourceType === 'BILLING') {
-            const meta = (item.metadata as any) || {};
-            const bill = await this.prisma.bill.findUnique({
-              where: { id: item.resourceId },
-              include: { institution: { select: { name: true, code: true } } },
-            }).catch(() => null);
-
-            entitySummary = {
-              id: item.resourceId,
-              title: bill ? `Bill #${bill.billNumber}` : meta.billNumber ? `Bill #${meta.billNumber}` : 'B2B Invoice Approval',
-              schoolName: bill?.institution?.name || meta.schoolName || 'Partner School',
-              totalAmount: bill?.totalAmount ?? meta.totalAmount ?? meta.amount ?? 0,
-              billNumber: bill?.billNumber || meta.billNumber,
-            };
-          } else if (item.resourceType === 'QUESTION_TRANSLATION' || item.resourceType === 'TRANSLATION') {
-            const meta = (item.metadata as any) || {};
-            entitySummary = {
-              id: item.resourceId,
-              title: meta.title || `Bilingual Translation for Question ${item.resourceId.substring(0, 8)}`,
-              language: meta.targetLanguage || meta.language || 'Hindi / Regional',
-            };
-          }
-        } catch {
-          // graceful fallback
+      try {
+        const user = item.requestedById ? userMap.get(item.requestedById) : null;
+        const staffRole = user?.userRoles?.[0]?.role?.name || 'STAFF';
+        if (user) {
+          requestedByEmail =
+            user.name ||
+            user.student?.name ||
+            user.email ||
+            user.mobileNumber ||
+            user.phone ||
+            'Staff';
         }
 
-        return {
-          ...item,
-          entitySummary,
-          requestedByName: requestedByEmail || 'Admin',
-        };
-      }),
-    );
+        if (item.resourceType === 'STAFF_UPDATE') {
+          const meta = (item.metadata as any) || {};
+          entitySummary = {
+            staffMember: requestedByEmail || 'Staff',
+            role: staffRole,
+            entityType: meta.entityType || 'ENTITY',
+            entityId: item.resourceId,
+            currentValue: meta.currentValue || null,
+            proposedValue: meta.proposedValue || null,
+            reason: meta.reason || item.rejectionReason || 'Staff update request',
+            submittedAt: item.submittedAt || item.createdAt,
+            status: item.status,
+          };
+        } else if (
+          item.resourceType === 'EXAM' ||
+          item.resourceType === 'MOCK_TEST' ||
+          item.resourceType === 'MOCK'
+        ) {
+          const exam = examMap.get(item.resourceId);
+          if (exam) {
+            const activeSchedule = exam.schedules?.[0];
+            const isMock =
+              item.resourceType === 'MOCK_TEST' ||
+              exam.title.toUpperCase().includes('MOCK') ||
+              exam.title.toUpperCase().includes('PRACTICE') ||
+              (exam.sections && exam.sections.length === 1);
+
+            entitySummary = {
+              id: exam.id,
+              title: exam.title,
+              targetExam: exam.examTarget?.name || 'General',
+              totalQuestions: exam.totalQuestions || exam._count.examQuestions || 0,
+              durationMinutes: exam.durationMinutes || 60,
+              totalMarks: exam.totalMarks || 0,
+              subjects: exam.sections.map((s) => s.subject.name),
+              status: exam.status?.name,
+              isMock,
+              scheduleId: activeSchedule?.id,
+              startTime: activeSchedule?.startTime
+                ? activeSchedule.startTime.toISOString()
+                : null,
+              endTime: activeSchedule?.endTime
+                ? activeSchedule.endTime.toISOString()
+                : null,
+            };
+          }
+        } else if (item.resourceType === 'QUESTION') {
+          const question = questionMap.get(item.resourceId);
+          if (question) {
+            entitySummary = {
+              id: question.id,
+              title:
+                question.translations?.[0]?.questionText?.substring(0, 100) ||
+                `Question ${question.id.substring(0, 8)}`,
+              subject: question.subject?.name,
+            };
+          }
+        } else if (item.resourceType === 'STUDENT') {
+          const meta = (item.metadata as any) || {};
+          const student = studentMap.get(item.resourceId);
+
+          entitySummary = {
+            id: item.resourceId,
+            title: student?.name || meta.name || 'Student Registration',
+            studentId: student?.studentId || meta.studentId || 'N/A',
+            studentCode: student?.studentCode || meta.studentCode || 'N/A',
+            schoolName:
+              student?.schoolCollege ||
+              student?.institution?.name ||
+              meta.schoolCollege ||
+              'School / College',
+            city: student?.district || meta.district || 'N/A',
+            state: student?.state || meta.state || 'N/A',
+            grade: student?.studentClass?.name || meta.grade || 'N/A',
+            targetExam:
+              student?.examTarget?.name ||
+              meta.targetExam ||
+              meta.examTarget ||
+              'General',
+            mobile: meta.mobile || meta.phone || 'N/A',
+            email: meta.email || 'N/A',
+          };
+        } else if (item.resourceType === 'BULK_UPLOAD') {
+          const meta = (item.metadata as any) || {};
+          const upload = bulkUploadMap.get(item.resourceId);
+
+          entitySummary = {
+            id: item.resourceId,
+            title:
+              upload?.fileName ||
+              meta.fileName ||
+              `Student Bulk Import (${upload?.validRowCount ?? meta.validRowCount ?? 0} Students)`,
+            schoolName:
+              upload?.institution?.name || meta.schoolName || 'Institution Roster',
+            validRowCount: upload?.validRowCount ?? meta.validRowCount ?? 0,
+            invalidRowCount: upload?.invalidRowCount ?? meta.invalidRowCount ?? 0,
+            batchId: upload?.batchId || meta.batchId || null,
+          };
+        } else if (item.resourceType === 'INSTITUTION') {
+          const meta = (item.metadata as any) || {};
+          const inst = institutionMap.get(item.resourceId);
+
+          entitySummary = {
+            id: item.resourceId,
+            title:
+              inst?.name ||
+              meta.name ||
+              `School Onboarding (${meta.code || 'Registration'})`,
+            code: inst?.code || meta.code || 'N/A',
+            city: inst?.city || meta.city || 'N/A',
+            state: inst?.state || meta.state || 'N/A',
+            type: inst?.type || meta.type || 'SCHOOL',
+          };
+        } else if (
+          item.resourceType === 'BILL' ||
+          item.resourceType === 'BILLING'
+        ) {
+          const meta = (item.metadata as any) || {};
+          const bill = billMap.get(item.resourceId);
+
+          entitySummary = {
+            id: item.resourceId,
+            title: bill
+              ? `Bill #${bill.billNumber}`
+              : meta.billNumber
+              ? `Bill #${meta.billNumber}`
+              : 'B2B Invoice Approval',
+            schoolName:
+              bill?.institution?.name || meta.schoolName || 'Partner School',
+            totalAmount:
+              bill?.totalAmount ?? meta.totalAmount ?? meta.amount ?? 0,
+            billNumber: bill?.billNumber || meta.billNumber,
+          };
+        } else if (
+          item.resourceType === 'QUESTION_TRANSLATION' ||
+          item.resourceType === 'TRANSLATION'
+        ) {
+          const meta = (item.metadata as any) || {};
+          entitySummary = {
+            id: item.resourceId,
+            title:
+              meta.title ||
+              `Bilingual Translation for Question ${item.resourceId.substring(0, 8)}`,
+            language: meta.targetLanguage || meta.language || 'Hindi / Regional',
+          };
+        }
+      } catch {
+        // graceful fallback
+      }
+
+      return {
+        ...item,
+        entitySummary,
+        requestedByName: requestedByEmail || 'Admin',
+      };
+    });
 
     return {
       data: items,

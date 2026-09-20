@@ -146,7 +146,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         message = 'Background processing is temporarily unavailable. Please try again.';
         error = 'Service Unavailable';
       } else {
-        message = exMessage;
+        message = this.sanitizeMessage(exMessage, statusCode);
       }
     }
 
@@ -169,7 +169,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const errorResponse: ApiErrorResponse = {
       success: false,
       statusCode,
-      message,
+      message: this.sanitizeMessage(message, statusCode),
       error,
       ...(code ? { code } : {}),
       details,
@@ -179,6 +179,26 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     };
 
     response.status(statusCode).json(errorResponse);
+  }
+
+  private sanitizeMessage(raw: string, statusCode: number): string {
+    if (!raw || typeof raw !== 'string') {
+      return 'Something went wrong. Please try again.';
+    }
+    if (statusCode >= 500) {
+      if (
+        raw === 'Internal server error' ||
+        raw.includes('Cannot read propert') ||
+        raw.includes('is not a function') ||
+        raw.includes('Unexpected token') ||
+        raw.includes('PrismaClient')
+      ) {
+        return 'Something went wrong while processing your request. Please try again.';
+      }
+    }
+    // Clean UUIDs from error message
+    const cleaned = raw.replace(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/gi, '').replace(/\s{2,}/g, ' ').trim();
+    return cleaned || 'Something went wrong. Please try again.';
   }
 
   /**

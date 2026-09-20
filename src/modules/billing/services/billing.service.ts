@@ -240,29 +240,30 @@ export class BillingService {
    * Returns list of all institutions with their current active pricing.
    */
   async getSchoolPricings() {
-    const institutions = await this.prisma.institution.findMany({
-      where: { status: { in: ['ACTIVE', 'APPROVED', 'DRAFT'] } },
-      select: {
-        id: true,
-        name: true,
-        code: true,
-        email: true,
-        phone: true,
-        city: true,
-        state: true,
-        pricings: {
-          where: { isActive: true },
-          orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
-          take: 1,
-          include: {
-            updatedBy: { select: { id: true, name: true, email: true } },
+    const [institutions, defaultPrice] = await Promise.all([
+      this.prisma.institution.findMany({
+        where: { status: { in: ['ACTIVE', 'APPROVED', 'DRAFT'] } },
+        select: {
+          id: true,
+          name: true,
+          code: true,
+          email: true,
+          phone: true,
+          city: true,
+          state: true,
+          pricings: {
+            where: { isActive: true },
+            orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }],
+            take: 1,
+            include: {
+              updatedBy: { select: { id: true, name: true, email: true } },
+            },
           },
         },
-      },
-      orderBy: { name: 'asc' },
-    });
-
-    const defaultPrice = await this.getPricingSetting();
+        orderBy: { name: 'asc' },
+      }),
+      this.getPricingSetting(),
+    ]);
 
     return institutions.map((inst: any) => {
       const activePricing = inst.pricings?.[0];

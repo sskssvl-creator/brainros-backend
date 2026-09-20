@@ -94,17 +94,31 @@ export class ExamAttemptService {
       );
     }
 
-    const examLangCount = await this.prisma.examLanguage.count({
-      where: { examId: dto.examId },
-    });
-    if (examLangCount > 0) {
-      const isAllowed = await this.prisma.examLanguage.findFirst({
-        where: { examId: dto.examId, languageId: resolvedLanguage.id },
+    if (typeof this.prisma.examLanguage?.findMany === 'function') {
+      const examLanguages = await this.prisma.examLanguage.findMany({
+        where: { examId: dto.examId },
       });
-      if (!isAllowed) {
-        throw new BadRequestException(
-          `Language '${resolvedLanguage.name}' is not configured for this exam.`,
-        );
+      if (examLanguages.length > 0) {
+        const isAllowed = examLanguages.some((l) => l.languageId === resolvedLanguage.id);
+        if (!isAllowed) {
+          throw new BadRequestException(
+            `Language '${resolvedLanguage.name}' is not configured for this exam.`,
+          );
+        }
+      }
+    } else {
+      const examLangCount = await this.prisma.examLanguage.count({
+        where: { examId: dto.examId },
+      });
+      if (examLangCount > 0) {
+        const isAllowed = await this.prisma.examLanguage.findFirst({
+          where: { examId: dto.examId, languageId: resolvedLanguage.id },
+        });
+        if (!isAllowed) {
+          throw new BadRequestException(
+            `Language '${resolvedLanguage.name}' is not configured for this exam.`,
+          );
+        }
       }
     }
 
@@ -426,32 +440,34 @@ export class ExamAttemptService {
     const attempt = await this.verifyAttemptOwnership(attemptId, studentId);
     this.verifyAttemptInProgress(attempt);
 
-    for (const answer of dto.answers) {
-      await this.prisma.answer.upsert({
-        where: {
-          attemptId_examQuestionId: {
+    await Promise.all(
+      dto.answers.map((answer) =>
+        this.prisma.answer.upsert({
+          where: {
+            attemptId_examQuestionId: {
+              attemptId,
+              examQuestionId: answer.examQuestionId,
+            },
+          },
+          update: {
+            selectedOptionId: answer.selectedOptionId ?? null,
+            numericalAnswer: answer.numericalAnswer ?? null,
+            selectedOptions: answer.selectedOptions ?? Prisma.JsonNull,
+            isMarkedForReview: answer.isMarkedForReview ?? false,
+            answeredAt: new Date(),
+          },
+          create: {
             attemptId,
             examQuestionId: answer.examQuestionId,
+            selectedOptionId: answer.selectedOptionId ?? null,
+            numericalAnswer: answer.numericalAnswer ?? null,
+            selectedOptions: answer.selectedOptions ?? Prisma.JsonNull,
+            isMarkedForReview: answer.isMarkedForReview ?? false,
+            answeredAt: new Date(),
           },
-        },
-        update: {
-          selectedOptionId: answer.selectedOptionId ?? null,
-          numericalAnswer: answer.numericalAnswer ?? null,
-          selectedOptions: answer.selectedOptions ?? Prisma.JsonNull,
-          isMarkedForReview: answer.isMarkedForReview ?? false,
-          answeredAt: new Date(),
-        },
-        create: {
-          attemptId,
-          examQuestionId: answer.examQuestionId,
-          selectedOptionId: answer.selectedOptionId ?? null,
-          numericalAnswer: answer.numericalAnswer ?? null,
-          selectedOptions: answer.selectedOptions ?? Prisma.JsonNull,
-          isMarkedForReview: answer.isMarkedForReview ?? false,
-          answeredAt: new Date(),
-        },
-      });
-    }
+        }),
+      ),
+    );
 
     return { message: `${dto.answers.length} answers saved` };
   }
@@ -485,8 +501,10 @@ export class ExamAttemptService {
     this.verifyAttemptInProgress(attempt);
 
     const now = new Date();
-    const inProgressStatus = await this.getStatus('IN_PROGRESS');
-    const submittedStatus = await this.getStatus('SUBMITTED');
+    const [inProgressStatus, submittedStatus] = await Promise.all([
+      this.getStatus('IN_PROGRESS'),
+      this.getStatus('SUBMITTED'),
+    ]);
 
     // Atomic compare-and-swap: only transition if status is currently IN_PROGRESS
     const updateResult = await this.prisma.attempt.updateMany({
@@ -862,15 +880,18 @@ export class ExamAttemptService {
       true,
     );
 
+    const attemptQuestionsToInsert: any[] = [];
+    const attemptQuestionOptionsToInsert: any[] = [];
+
     for (let qIdx = 0; qIdx < shuffled.length; qIdx++) {
       const sq = shuffled[qIdx];
-      const aq = await this.prisma.attemptQuestion.create({
-        data: {
-          attemptId,
-          examQuestionId: sq.id,
-          displayOrder: qIdx + 1,
-          sectionId: sq.sectionId ?? null,
-        },
+      const aqId = randomUUID();
+      attemptQuestionsToInsert.push({
+        id: aqId,
+        attemptId,
+        examQuestionId: sq.id,
+        displayOrder: qIdx + 1,
+        sectionId: sq.sectionId ?? null,
       });
 
       const shuffledOpts = this.questionShuffleService.shuffleOptions(
@@ -880,14 +901,27 @@ export class ExamAttemptService {
       );
 
       if (shuffledOpts.length > 0) {
-        await this.prisma.attemptQuestionOption.createMany({
-          data: shuffledOpts.map((opt, optIdx) => ({
-            attemptQuestionId: aq.id,
-            examQuestionOptionId: opt.id,
+        for (let optIdx = 0; optIdx < shuffledOpts.length; optIdx++) {
+          attemptQuestionOptionsToInsert.push({
+            id: randomUUID(),
+            attemptQuestionId: aqId,
+            examQuestionOptionId: shuffledOpts[optIdx].id,
             displayOrder: optIdx + 1,
-          })),
-        });
+          });
+        }
       }
+    }
+
+    if (attemptQuestionsToInsert.length > 0) {
+      await this.prisma.attemptQuestion.createMany({
+        data: attemptQuestionsToInsert,
+      });
+    }
+
+    if (attemptQuestionOptionsToInsert.length > 0) {
+      await this.prisma.attemptQuestionOption.createMany({
+        data: attemptQuestionOptionsToInsert,
+      });
     }
   }
 

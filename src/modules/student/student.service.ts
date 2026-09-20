@@ -609,7 +609,7 @@ export class StudentService {
     const eligibleTargetIds = await this.getEligibleExamTargetIdsForStudent(student);
 
     const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.max(1, Math.min(50, Number(query.limit) || 10));
+    const limit = Math.max(1, Math.min(50, Number(query.limit) || 5));
     const skip = (page - 1) * limit;
     const now = new Date();
 
@@ -664,7 +664,7 @@ export class StudentService {
         {
           OR: [
             { startTime: { gt: now } },
-            { schedules: { some: { status: { name: { in: ['SCHEDULED', 'ACTIVE'] } }, startTime: { gt: now } } } },
+            { schedules: { some: { status: { in: ['SCHEDULED', 'ACTIVE'] }, startTime: { gt: now } } } },
           ],
         },
         {
@@ -684,7 +684,7 @@ export class StudentService {
         {
           OR: [
             { startTime: { lte: now }, endTime: { gt: now } },
-            { schedules: { some: { status: { name: 'ACTIVE' }, startTime: { lte: now }, endTime: { gt: now } } } },
+            { schedules: { some: { status: 'ACTIVE', startTime: { lte: now }, endTime: { gt: now } } } },
           ],
         },
         {
@@ -885,7 +885,7 @@ export class StudentService {
     const eligibleTargetIds = await this.getEligibleExamTargetIdsForStudent(student);
 
     const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.max(1, Math.min(50, Number(query.limit) || 10));
+    const limit = Math.max(1, Math.min(50, Number(query.limit) || 5));
     const skip = (page - 1) * limit;
 
     // Base criteria: Approved, non-draft mock exams
@@ -1103,7 +1103,7 @@ export class StudentService {
     }
 
     const page = Math.max(1, Number(query.page) || 1);
-    const limit = Math.max(1, Math.min(50, Number(query.limit) || 10));
+    const limit = Math.max(1, Math.min(50, Number(query.limit) || 5));
     const skip = (page - 1) * limit;
 
     const where: any = {
@@ -1361,7 +1361,7 @@ export class StudentService {
     });
 
     const page = Math.max(1, parseInt(query?.page || '1', 10));
-    const limit = Math.max(1, Math.min(50, parseInt(query?.limit || '10', 10)));
+    const limit = Math.max(1, Math.min(50, parseInt(query?.limit || '5', 10)));
     const startIndex = (page - 1) * limit;
     const paginatedAttempts = sortedAttempts.slice(startIndex, startIndex + limit);
 

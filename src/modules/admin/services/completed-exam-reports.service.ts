@@ -176,119 +176,131 @@ export class CompletedExamReportsService {
       }),
     ]);
 
-    const items = await Promise.all(
-      exams.map(async (exam) => {
-        const schedule = exam.schedules?.[0];
-        const pub = exam.resultPublications?.[0];
+    // Pre-extract all configured chapter IDs across all page exams in one pass
+    const globalChapterIdsSet = new Set<string>();
+    const examThresholdMap = new Map<string, any>();
 
-        let thresholdData: any = null;
-        try {
-          if (typeof exam.performanceThresholds === 'string') {
-            thresholdData = JSON.parse(exam.performanceThresholds);
-          } else if (exam.performanceThresholds && typeof exam.performanceThresholds === 'object') {
-            thresholdData = exam.performanceThresholds;
-          }
-        } catch {
-          thresholdData = null;
+    for (const exam of exams) {
+      let thresholdData: any = null;
+      try {
+        if (typeof exam.performanceThresholds === 'string') {
+          thresholdData = JSON.parse(exam.performanceThresholds);
+        } else if (exam.performanceThresholds && typeof exam.performanceThresholds === 'object') {
+          thresholdData = exam.performanceThresholds;
         }
+      } catch {
+        thresholdData = null;
+      }
+      examThresholdMap.set(exam.id, thresholdData);
 
-        const allConfiguredChapterIds: string[] = [];
-        if (thresholdData?.subjectGroups && Array.isArray(thresholdData.subjectGroups)) {
-          for (const group of thresholdData.subjectGroups) {
-            if (group.chapterIds && Array.isArray(group.chapterIds)) {
-              allConfiguredChapterIds.push(...group.chapterIds);
-            }
+      if (thresholdData?.subjectGroups && Array.isArray(thresholdData.subjectGroups)) {
+        for (const group of thresholdData.subjectGroups) {
+          if (group.chapterIds && Array.isArray(group.chapterIds)) {
+            group.chapterIds.forEach((id: string) => globalChapterIdsSet.add(id));
           }
         }
+      }
+    }
 
-        let dbConfiguredChapters: { id: string; name: string; subjectId: string }[] = [];
-        if (allConfiguredChapterIds.length > 0) {
-          dbConfiguredChapters = await this.prisma.chapter.findMany({
-            where: { id: { in: allConfiguredChapterIds } },
+    const allGlobalChapterIds = Array.from(globalChapterIdsSet);
+    const [allDbChapters, allScoreStats] = await Promise.all([
+      allGlobalChapterIds.length > 0
+        ? this.prisma.chapter.findMany({
+            where: { id: { in: allGlobalChapterIds } },
             select: { id: true, name: true, subjectId: true },
-          });
-        }
-        const dbChapterMap = new Map<string, { id: string; name: string; subjectId: string }>();
-        dbConfiguredChapters.forEach((c) => dbChapterMap.set(c.id, c));
+          })
+        : ([] as { id: string; name: string; subjectId: string }[]),
+      Promise.all(
+        exams.map((exam) =>
+          this.prisma.result.aggregate({
+            where: { attempt: { examId: exam.id } },
+            _avg: { totalScore: true, percentage: true, accuracy: true },
+            _max: { totalScore: true },
+            _min: { totalScore: true },
+            _count: { id: true },
+          }),
+        ),
+      ),
+    ]);
 
-        const formattedSections = exam.sections.map((s) => {
-          const chapterNamesSet = new Set<string>();
+    const dbChapterMap = new Map<string, { id: string; name: string; subjectId: string }>();
+    allDbChapters.forEach((c) => dbChapterMap.set(c.id, c));
 
-          s.examQuestions?.forEach((eq: any) => {
-            if (eq.question?.chapter?.name) {
-              chapterNamesSet.add(eq.question.chapter.name.trim());
-            }
-          });
+    const items = exams.map((exam, index) => {
+      const schedule = exam.schedules?.[0];
+      const pub = exam.resultPublications?.[0];
+      const thresholdData = examThresholdMap.get(exam.id);
 
-          if (thresholdData?.subjectGroups && Array.isArray(thresholdData.subjectGroups)) {
-            const matchedGroup = thresholdData.subjectGroups.find(
-              (g: any) => g.subjectId === s.subjectId,
-            );
-            if (matchedGroup && Array.isArray(matchedGroup.chapterIds)) {
-              for (const chId of matchedGroup.chapterIds) {
-                const ch = dbChapterMap.get(chId);
-                if (ch?.name) {
-                  chapterNamesSet.add(ch.name.trim());
-                }
+      const formattedSections = exam.sections.map((s) => {
+        const chapterNamesSet = new Set<string>();
+
+        s.examQuestions?.forEach((eq: any) => {
+          if (eq.question?.chapter?.name) {
+            chapterNamesSet.add(eq.question.chapter.name.trim());
+          }
+        });
+
+        if (thresholdData?.subjectGroups && Array.isArray(thresholdData.subjectGroups)) {
+          const matchedGroup = thresholdData.subjectGroups.find(
+            (g: any) => g.subjectId === s.subjectId,
+          );
+          if (matchedGroup && Array.isArray(matchedGroup.chapterIds)) {
+            for (const chId of matchedGroup.chapterIds) {
+              const ch = dbChapterMap.get(chId);
+              if (ch?.name) {
+                chapterNamesSet.add(ch.name.trim());
               }
             }
-          } else if (allConfiguredChapterIds.length > 0) {
-            dbConfiguredChapters
-              .filter((c) => c.subjectId === s.subjectId)
-              .forEach((c) => chapterNamesSet.add(c.name.trim()));
           }
-
-          return {
-            id: s.id,
-            name: s.name,
-            displayOrder: s.displayOrder,
-            totalQuestions: s.totalQuestions || s._count?.examQuestions || 0,
-            subject: s.subject,
-            chapters: Array.from(chapterNamesSet),
-          };
-        });
-
-        const scoreStats = await this.prisma.result.aggregate({
-          where: { attempt: { examId: exam.id } },
-          _avg: { totalScore: true, percentage: true, accuracy: true },
-          _max: { totalScore: true },
-          _min: { totalScore: true },
-          _count: { id: true },
-        });
-
-        const totalAttempts = exam._count.attempts;
-        const totalEvaluated = scoreStats._count.id;
-        const distinctSubjects = [...new Set(formattedSections.map((s) => s.subject?.name).filter(Boolean))];
+        } else if (allDbChapters.length > 0) {
+          allDbChapters
+            .filter((c) => c.subjectId === s.subjectId)
+            .forEach((c) => chapterNamesSet.add(c.name.trim()));
+        }
 
         return {
-          id: exam.id,
-          title: exam.title,
-          description: exam.description,
-          examTarget: exam.examTarget?.name || 'General',
-          examTargetId: exam.examTargetId,
-          examDate: exam.examDate || schedule?.startTime || exam.startTime,
-          startTime: schedule?.startTime || exam.startTime,
-          endTime: schedule?.endTime || exam.endTime,
-          durationMinutes: exam.durationMinutes,
-          totalQuestions: exam.totalQuestions,
-          totalMarks: exam.totalMarks,
-          defaultMarksPerQuestion: exam.defaultMarksPerQuestion,
-          defaultNegativeMarks: exam.defaultNegativeMarks,
-          status: exam.status?.name || 'ENDED',
-          publicationStatus: pub?.status || (totalEvaluated > 0 ? 'READY_TO_PUBLISH' : 'NOT_READY'),
-          publishedAt: pub?.publishedAt || null,
-          subjects: distinctSubjects,
-          sections: formattedSections,
-          totalAttempts,
-          totalEvaluated,
-          averageScore: scoreStats._avg.totalScore ? Number(scoreStats._avg.totalScore).toFixed(1) : '0',
-          averagePercentage: scoreStats._avg.percentage ? Number(scoreStats._avg.percentage).toFixed(1) : '0',
-          averageAccuracy: scoreStats._avg.accuracy ? Number(scoreStats._avg.accuracy).toFixed(1) : '0',
-          highestScore: scoreStats._max.totalScore ?? 0,
-          lowestScore: scoreStats._min.totalScore ?? 0,
+          id: s.id,
+          name: s.name,
+          displayOrder: s.displayOrder,
+          totalQuestions: s.totalQuestions || s._count?.examQuestions || 0,
+          subject: s.subject,
+          chapters: Array.from(chapterNamesSet),
         };
-      }),
-    );
+      });
+
+      const scoreStats = allScoreStats[index];
+      const totalAttempts = exam._count.attempts;
+      const totalEvaluated = scoreStats._count.id;
+      const distinctSubjects = [...new Set(formattedSections.map((s) => s.subject?.name).filter(Boolean))];
+
+      return {
+        id: exam.id,
+        title: exam.title,
+        description: exam.description,
+        examTarget: exam.examTarget?.name || 'General',
+        examTargetId: exam.examTargetId,
+        examDate: exam.examDate || schedule?.startTime || exam.startTime,
+        startTime: schedule?.startTime || exam.startTime,
+        endTime: schedule?.endTime || exam.endTime,
+        durationMinutes: exam.durationMinutes,
+        totalQuestions: exam.totalQuestions,
+        totalMarks: exam.totalMarks,
+        defaultMarksPerQuestion: exam.defaultMarksPerQuestion,
+        defaultNegativeMarks: exam.defaultNegativeMarks,
+        status: exam.status?.name || 'ENDED',
+        publicationStatus: pub?.status || (totalEvaluated > 0 ? 'READY_TO_PUBLISH' : 'NOT_READY'),
+        publishedAt: pub?.publishedAt || null,
+        subjects: distinctSubjects,
+        sections: formattedSections,
+        totalAttempts,
+        totalEvaluated,
+        averageScore: scoreStats._avg.totalScore ? Number(scoreStats._avg.totalScore).toFixed(1) : '0',
+        averagePercentage: scoreStats._avg.percentage ? Number(scoreStats._avg.percentage).toFixed(1) : '0',
+        averageAccuracy: scoreStats._avg.accuracy ? Number(scoreStats._avg.accuracy).toFixed(1) : '0',
+        highestScore: scoreStats._max.totalScore ?? 0,
+        lowestScore: scoreStats._min.totalScore ?? 0,
+      };
+    });
 
     return {
       exams: items,

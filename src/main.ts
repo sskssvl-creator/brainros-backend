@@ -1,16 +1,14 @@
-import './common/infrastructure/init-bullmq';
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
+
+// 1. Load environment variables before any application modules evaluate
 if (process.env.NODE_ENV === 'production' && fs.existsSync('.env.production')) {
   dotenv.config({ path: '.env.production', override: true });
-} else {
-  if (fs.existsSync('.env')) {
-    dotenv.config({ path: '.env', override: true });
-  }
-  if (process.env.NODE_ENV === 'production' && fs.existsSync('.env.production')) {
-    dotenv.config({ path: '.env.production', override: true });
-  }
+} else if (fs.existsSync('.env')) {
+  dotenv.config({ path: '.env', override: true });
 }
+
+import './common/infrastructure/init-bullmq';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe, BadRequestException } from '@nestjs/common';
@@ -18,11 +16,13 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
 import { GlobalExceptionFilter } from './common/filters/global-exception.filter';
 import { AppLoggerService } from './common/logger/logger.service';
 import { InfrastructureStateService } from './common/infrastructure/infrastructure-state.service';
-import { parseBooleanFlag } from './modules/feature-flag/feature-flag.constants';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import compression from 'compression';
 import * as express from 'express';
+import { validateEnvironment } from './common/config/environment-validation';
+
+export { validateEnvironment };
 
 // Global error handlers to prevent silent process death
 const bootstrapLogger = new AppLoggerService();
@@ -44,9 +44,6 @@ process.on('uncaughtException', (error: Error) => {
   );
 });
 
-import { validateEnvironment } from './common/config/environment-validation';
-export { validateEnvironment };
-
 async function bootstrap() {
   const bootstrapStartTime = Date.now();
   bootstrapLogger.log('[STARTUP] Beginning application bootstrap...', 'Bootstrap');
@@ -58,7 +55,7 @@ async function bootstrap() {
     rawBody: true,
   });
 
-  const port = process.env.PORT ?? 3000;
+  const port = Number(process.env.PORT) || 3000;
 
   const appLogger = app.get(AppLoggerService);
   app.useLogger(appLogger);
@@ -114,8 +111,12 @@ async function bootstrap() {
     }),
   );
   app.use(cookieParser());
+
+  // Body parsers with safe production payload limit (15MB for large question papers & batch imports)
+  const bodyLimit = process.env.BODY_PAYLOAD_LIMIT || '15mb';
   app.use(
     express.json({
+      limit: bodyLimit,
       verify: (req: any, _res: any, buf: Buffer) => {
         req.rawBody = buf;
       },
@@ -124,6 +125,7 @@ async function bootstrap() {
   app.use(
     express.urlencoded({
       extended: true,
+      limit: bodyLimit,
       verify: (req: any, _res: any, buf: Buffer) => {
         req.rawBody = buf;
       },
@@ -200,7 +202,7 @@ async function bootstrap() {
     optionsSuccessStatus: 204,
   });
 
-  // Register global validation pipe BEFORE listen
+  // Register global validation pipe
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -231,32 +233,14 @@ async function bootstrap() {
     }),
   );
 
-  // Register global HTTP response formatting interceptor BEFORE listen
+  // Register global HTTP response formatting interceptor
   app.useGlobalInterceptors(new ResponseInterceptor());
 
-  // Register global unhandled exception and database error filter with centralized logger BEFORE listen
+  // Register global unhandled exception and database error filter
   const infrastructureState = app.get(InfrastructureStateService);
   app.useGlobalFilters(new GlobalExceptionFilter(appLogger, infrastructureState));
 
-  // Handle termination signals cleanly
-  const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT'];
-  for (const signal of signals) {
-    process.on(signal, async () => {
-      appLogger.log(`Received ${signal}. Initiating graceful shutdown...`, 'Shutdown');
-      try {
-        await app.close();
-        appLogger.log('Application closed cleanly.', 'Shutdown');
-        appLogger.flush();
-        process.exit(0);
-      } catch (err: any) {
-        appLogger.error(`Error during graceful shutdown: ${err.message}`, err.stack, 'Shutdown');
-        appLogger.flush();
-        process.exit(1);
-      }
-    });
-  }
-
-  // Unconditionally listen on all interfaces
+  // Listen on all interfaces
   await app.listen(port, '0.0.0.0');
 
   const bootstrapDuration = Date.now() - bootstrapStartTime;
@@ -265,7 +249,7 @@ async function bootstrap() {
     'Bootstrap',
   );
 
-  // Evaluate and log startup status of dependent services
+  // Evaluate startup status of dependent services
   const healthReport = infrastructureState.getHealthReport();
   const degradedServices: string[] = [];
   if (healthReport.database !== 'up') {
@@ -290,27 +274,6 @@ async function bootstrap() {
       `[STARTUP] Application fully operational in ${process.env.NODE_ENV || 'development'} mode.`,
       'Bootstrap',
     );
-  }
-
-  // Start optional Ngrok tunnel if enabled
-  if (process.env.ENABLE_NGROK === 'true' && process.env.NGROK_AUTHTOKEN) {
-    try {
-      const ngrok = await import('@ngrok/ngrok');
-      const ngrokDomain = process.env.NGROK_DOMAIN || 'footing-gallon-radial.ngrok-free.dev';
-      const forwarder = await ngrok.forward({
-        addr: `localhost:${port}`,
-        domain: ngrokDomain,
-        authtoken_from_env: true,
-        request_header_add: ['ngrok-skip-browser-warning:true'],
-        ...(process.env.NGROK_AUTHTOKEN ? { authtoken: process.env.NGROK_AUTHTOKEN } : {}),
-      });
-      appLogger.log(
-        `[Ngrok] Public tunnel online: ${forwarder.url()} -> localhost:${port}`,
-        'Bootstrap',
-      );
-    } catch (err: any) {
-      appLogger.warn(`[Ngrok] Could not establish tunnel: ${err.message}`, 'Bootstrap');
-    }
   }
 
   appLogger.flush();
