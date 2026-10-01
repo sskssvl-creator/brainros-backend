@@ -329,10 +329,15 @@ export class ExamCalendarService {
       throw new NotFoundException(`Calendar event '${eventId}' not found.`);
     }
 
-    // Block edits on completed/cancelled
-    if (['COMPLETED', 'CANCELLED'].includes(existing.status)) {
+    // Block edits on completed/cancelled or ended window
+    if (['COMPLETED', 'CANCELLED', 'ENDED', 'EXPIRED'].includes(existing.status)) {
       throw new BadRequestException(
         `Cannot edit a calendar event in status '${existing.status}'.`,
+      );
+    }
+    if (existing.plannedEndTime && new Date() > new Date(existing.plannedEndTime)) {
+      throw new BadRequestException(
+        'Cannot edit a calendar event whose exam window has ended.',
       );
     }
 

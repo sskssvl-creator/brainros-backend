@@ -1513,13 +1513,16 @@ export class ExamAttemptService {
   }
 
   private async getStatus(name: string) {
-    const status = await this.prisma.attemptStatus.findUnique({
+    let status = await this.prisma.attemptStatus.findUnique({
       where: { name },
     });
-    if (!status)
-      throw new BadRequestException(
-        `Attempt status '${name}' not found. Run seeds.`,
-      );
+    if (!status) {
+      status = await this.prisma.attemptStatus.upsert({
+        where: { name },
+        update: {},
+        create: { name },
+      });
+    }
     return status;
   }
 
