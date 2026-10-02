@@ -1055,18 +1055,26 @@ export class ExamAttemptService {
                 (defaultLangId ? qItem.translations[defaultLangId] : null) ||
                 Object.values(qItem.translations)[0];
 
-              // Map options strictly according to student's personalized AttemptQuestionOption.displayOrder
               const orderedOptions = aq.options
                 .map((aqo) => {
                   const optItem = qItem.optionsById[aqo.examQuestionOptionId];
                   if (!optItem) return null;
 
-                  const matchedOptTranslation =
-                    optItem.translations?.[currentLanguageId]?.optionText ||
-                    optItem.translations?.[currentLanguageId.toLowerCase()]?.optionText ||
-                    (defaultLangId ? optItem.translations?.[defaultLangId]?.optionText : null) ||
+                  const optTrans =
+                    optItem.translations?.[currentLanguageId] ||
+                    optItem.translations?.[currentLanguageId.toLowerCase()] ||
+                    (defaultLangId ? optItem.translations?.[defaultLangId] : null);
+
+                  const matchedOptText =
+                    optTrans?.optionText ||
                     optItem.optionText ||
-                    optItem.optionLabel;
+                    optItem.optionLabel ||
+                    '';
+
+                  const matchedOptContent =
+                    optTrans?.optionContent ||
+                    optItem.optionContent ||
+                    null;
 
                   return {
                     id: optItem.id,
@@ -1074,11 +1082,8 @@ export class ExamAttemptService {
                     displayOrder: aqo.displayOrder,
                     optionKey: optItem.optionKey,
                     optionLabel: optItem.optionLabel || optItem.optionKey || '',
-                    optionText:
-                      matchedOptTranslation ||
-                      optItem.optionText ||
-                      optItem.optionLabel ||
-                      '',
+                    optionText: matchedOptText,
+                    optionContent: matchedOptContent,
                     translations: optItem.translations || {},
                   };
                 })
@@ -1099,10 +1104,15 @@ export class ExamAttemptService {
                   code: qItem.questionType,
                 },
                 passage: matchedTranslation?.passageText || qItem.passage || null,
+                passageContent: matchedTranslation?.passageContent || qItem.passageContent || null,
                 assertion: matchedTranslation?.assertionText || qItem.assertion || null,
+                assertionContent: matchedTranslation?.assertionContent || qItem.assertionContent || null,
                 reason: matchedTranslation?.reasonText || qItem.reason || null,
+                reasonContent: matchedTranslation?.reasonContent || qItem.reasonContent || null,
                 questionText:
                   matchedTranslation?.questionText || qItem.questionText || '',
+                questionContent:
+                  matchedTranslation?.questionContent || qItem.questionContent || null,
                 translations: qItem.translations,
                 options: orderedOptions,
               };
@@ -1192,17 +1202,25 @@ export class ExamAttemptService {
           string,
           {
             questionText: string;
+            questionContent?: any;
             passageText?: string | null;
+            passageContent?: any;
             assertionText?: string | null;
+            assertionContent?: any;
             reasonText?: string | null;
+            reasonContent?: any;
           }
         > = {};
         q.translations.forEach((t) => {
           const transObj = {
             questionText: t.questionText,
+            questionContent: (t as any).questionContent || null,
             passageText: t.passageText || null,
+            passageContent: (t as any).passageContent || null,
             assertionText: t.assertionText || null,
+            assertionContent: (t as any).assertionContent || null,
             reasonText: t.reasonText || null,
+            reasonContent: (t as any).reasonContent || null,
           };
           qTranslationsMap[t.languageId] = transObj;
           if (t.language?.code) {
@@ -1235,11 +1253,12 @@ export class ExamAttemptService {
               ) ||
               rawOpt.translations?.[0];
 
-            const optTranslationsMap: Record<string, { optionText: string }> = {};
+            const optTranslationsMap: Record<string, { optionText: string; optionContent?: any }> = {};
             (rawOpt.translations || []).forEach((ot: any) => {
               const optTransObj = {
                 optionText:
                   ot.optionText || rawOpt.optionText || rawOpt.optionLabel || '',
+                optionContent: ot.optionContent || (rawOpt as any).optionContent || null,
               };
               optTranslationsMap[ot.languageId] = optTransObj;
               if (ot.language?.code) {
@@ -1258,6 +1277,10 @@ export class ExamAttemptService {
                 rawOpt.optionText ||
                 rawOpt.optionLabel ||
                 '',
+              optionContent:
+                (matchedOptTranslation as any)?.optionContent ||
+                (rawOpt as any).optionContent ||
+                null,
               translations: optTranslationsMap,
             };
           })
@@ -1274,10 +1297,15 @@ export class ExamAttemptService {
           type: q.type,
           questionType: q.questionType,
           passage: matchedTranslation?.passageText || q.passage || null,
+          passageContent: (matchedTranslation as any)?.passageContent || (q as any).passageContent || null,
           assertion: matchedTranslation?.assertionText || q.assertion || null,
+          assertionContent: (matchedTranslation as any)?.assertionContent || (q as any).assertionContent || null,
           reason: matchedTranslation?.reasonText || q.reason || null,
+          reasonContent: (matchedTranslation as any)?.reasonContent || (q as any).reasonContent || null,
           questionText:
             matchedTranslation?.questionText || (q as any).questionText || '',
+          questionContent:
+            (matchedTranslation as any)?.questionContent || (q as any).questionContent || null,
           translations: qTranslationsMap,
           options: orderedOptions,
         };

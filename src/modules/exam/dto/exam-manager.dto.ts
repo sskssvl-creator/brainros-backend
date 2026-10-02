@@ -290,20 +290,35 @@ export class ManualQuestionItemDto {
     | 'MATCH_FOLLOWING';
 
   @IsOptional()
+  questionContent?: any;
+
+  @IsOptional()
   @IsString()
   optionA?: string;
+
+  @IsOptional()
+  optionAContent?: any;
 
   @IsOptional()
   @IsString()
   optionB?: string;
 
   @IsOptional()
+  optionBContent?: any;
+
+  @IsOptional()
   @IsString()
   optionC?: string;
 
   @IsOptional()
+  optionCContent?: any;
+
+  @IsOptional()
   @IsString()
   optionD?: string;
+
+  @IsOptional()
+  optionDContent?: any;
 
   @IsOptional()
   @IsString()
@@ -321,8 +336,14 @@ export class ManualQuestionItemDto {
   assertion?: string;
 
   @IsOptional()
+  assertionContent?: any;
+
+  @IsOptional()
   @IsString()
   reason?: string;
+
+  @IsOptional()
+  reasonContent?: any;
 
   @IsOptional()
   @IsArray()
@@ -339,6 +360,9 @@ export class ManualQuestionItemDto {
   @IsOptional()
   @IsString()
   explanation?: string;
+
+  @IsOptional()
+  explanationContent?: any;
 
   @IsOptional()
   @IsUUID()

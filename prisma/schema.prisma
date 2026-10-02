@@ -690,8 +690,12 @@ model Question {
   marks               Float                     @default(4)
   negativeMarks       Float                     @default(1) @map("negative_marks")
   passage             String?                   @db.Text
+  passageContent      Json?                     @map("passage_content")
   assertion           String?                   @db.Text
+  assertionContent    Json?                     @map("assertion_content")
   reason              String?                   @db.Text
+  reasonContent       Json?                     @map("reason_content")
+  questionContent     Json?                     @map("question_content")
   isActive            Boolean                   @default(true) @map("is_active")
   createdById         String                    @map("created_by_id") @db.Uuid
   submittedById       String?                   @map("submitted_by_id") @db.Uuid
@@ -743,18 +747,22 @@ model Question {
 }
 
 model QuestionTranslation {
-  id            String            @id @default(uuid()) @db.Uuid
-  questionId    String            @map("question_id") @db.Uuid
-  languageId    String            @map("language_id") @db.Uuid
-  questionText  String            @map("question_text") @db.Text
-  passageText   String?           @map("passage_text") @db.Text
-  assertionText String?           @map("assertion_text") @db.Text
-  reasonText    String?           @map("reason_text") @db.Text
-  explanation   String?           @db.Text
-  createdAt     DateTime          @default(now()) @map("created_at")
-  updatedAt     DateTime          @updatedAt @map("updated_at")
-  question      Question          @relation(fields: [questionId], references: [id], onDelete: Cascade)
-  language      PreferredLanguage @relation(fields: [languageId], references: [id])
+  id              String            @id @default(uuid()) @db.Uuid
+  questionId      String            @map("question_id") @db.Uuid
+  languageId      String            @map("language_id") @db.Uuid
+  questionText    String            @map("question_text") @db.Text
+  questionContent Json?             @map("question_content")
+  passageText     String?           @map("passage_text") @db.Text
+  passageContent  Json?             @map("passage_content")
+  assertionText   String?           @map("assertion_text") @db.Text
+  assertionContent Json?            @map("assertion_content")
+  reasonText      String?           @map("reason_text") @db.Text
+  reasonContent   Json?             @map("reason_content")
+  explanation     String?           @db.Text
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+  question        Question          @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  language        PreferredLanguage @relation(fields: [languageId], references: [id])
 
   @@unique([questionId, languageId])
   @@index([languageId])
@@ -767,6 +775,7 @@ model QuestionOption {
   optionKey    String                      @default("A") @map("option_key")
   optionLabel  String?                     @map("option_label")
   optionText   String?                     @map("option_text") @db.Text
+  optionContent Json?                      @map("option_content")
   matchColumn  String?                     @map("match_column")
   matchPairKey String?                     @map("match_pair_key")
   isCorrect    Boolean                     @default(false) @map("is_correct")
@@ -783,14 +792,15 @@ model QuestionOption {
 }
 
 model QuestionOptionTranslation {
-  id         String            @id @default(uuid()) @db.Uuid
-  optionId   String            @map("option_id") @db.Uuid
-  languageId String            @map("language_id") @db.Uuid
-  optionText String            @map("option_text") @db.Text
-  createdAt  DateTime          @default(now()) @map("created_at")
-  updatedAt  DateTime          @updatedAt @map("updated_at")
-  option     QuestionOption    @relation(fields: [optionId], references: [id], onDelete: Cascade)
-  language   PreferredLanguage @relation(fields: [languageId], references: [id])
+  id            String            @id @default(uuid()) @db.Uuid
+  optionId      String            @map("option_id") @db.Uuid
+  languageId    String            @map("language_id") @db.Uuid
+  optionText    String            @map("option_text") @db.Text
+  optionContent Json?             @map("option_content")
+  createdAt     DateTime          @default(now()) @map("created_at")
+  updatedAt     DateTime          @updatedAt @map("updated_at")
+  option        QuestionOption    @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  language      PreferredLanguage @relation(fields: [languageId], references: [id])
 
   @@unique([optionId, languageId])
   @@index([languageId])
@@ -1508,9 +1518,13 @@ model ExamVersionQuestion {
   marks                 Float
   negativeMarks         Float                     @map("negative_marks")
   passage               String?                   @db.Text
+  passageContent        Json?                     @map("passage_content")
   assertion             String?                   @db.Text
+  assertionContent      Json?                     @map("assertion_content")
   reason                String?                   @db.Text
+  reasonContent         Json?                     @map("reason_content")
   questionText          String                    @map("question_text") @db.Text
+  questionContent       Json?                     @map("question_content")
   explanation           String?                   @db.Text
   correctAnswer         Json?                     @map("correct_answer")
   createdAt             DateTime                  @default(now()) @map("created_at")
@@ -1535,6 +1549,7 @@ model ExamVersionOption {
   optionKey             String                          @map("option_key")
   optionLabel           String?                         @map("option_label")
   optionText            String                          @map("option_text") @db.Text
+  optionContent         Json?                           @map("option_content")
   isCorrect             Boolean                         @default(false) @map("is_correct")
   createdAt             DateTime                        @default(now()) @map("created_at")
   updatedAt             DateTime                        @updatedAt @map("updated_at")
@@ -1554,9 +1569,13 @@ model ExamVersionTranslation {
   languageId            String              @map("language_id") @db.Uuid
   languageCode          String              @map("language_code")
   questionText          String              @map("question_text") @db.Text
+  questionContent       Json?               @map("question_content")
   passageText           String?             @map("passage_text") @db.Text
+  passageContent        Json?               @map("passage_content")
   assertionText         String?             @map("assertion_text") @db.Text
+  assertionContent      Json?               @map("assertion_content")
   reasonText            String?             @map("reason_text") @db.Text
+  reasonContent         Json?               @map("reason_content")
   explanation           String?             @db.Text
   createdAt             DateTime            @default(now()) @map("created_at")
   updatedAt             DateTime            @updatedAt @map("updated_at")
@@ -1574,6 +1593,7 @@ model ExamVersionOptionTranslation {
   languageId            String            @map("language_id") @db.Uuid
   languageCode          String            @map("language_code")
   optionText            String            @map("option_text") @db.Text
+  optionContent         Json?             @map("option_content")
   createdAt             DateTime          @default(now()) @map("created_at")
   updatedAt             DateTime          @updatedAt @map("updated_at")
 

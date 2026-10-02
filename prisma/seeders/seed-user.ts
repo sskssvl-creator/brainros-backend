@@ -8,13 +8,13 @@ import * as bcrypt from 'bcrypt';
 const prodEnvPath = path.resolve(__dirname, '../../.env.production');
 const devEnvPath = path.resolve(__dirname, '../../.env');
 
-if (fs.existsSync(prodEnvPath)) {
+if (fs.existsSync(devEnvPath)) {
+  dotenv.config({ path: devEnvPath });
+} else if (fs.existsSync(prodEnvPath)) {
   const envConfig = dotenv.parse(fs.readFileSync(prodEnvPath));
   for (const k in envConfig) {
     process.env[k] = envConfig[k];
   }
-} else if (fs.existsSync(devEnvPath)) {
-  dotenv.config({ path: devEnvPath });
 }
 
 const prisma = new PrismaClient();

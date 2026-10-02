@@ -13,7 +13,12 @@ export const DEFAULT_PERFORMANCE_THRESHOLDS: PerformanceThresholds = {
 };
 
 export type PerformanceStatus =
-  'EXCELLENT' | 'STRONG' | 'GOOD' | 'WEAK' | 'CRITICAL' | 'NOT_ATTEMPTED';
+  | 'EXCELLENT'
+  | 'STRONG'
+  | 'GOOD'
+  | 'WEAK'
+  | 'CRITICAL'
+  | 'NOT_ATTEMPTED';
 
 export interface OverallPerformanceMetrics {
   totalMarks: number;
@@ -149,6 +154,194 @@ export interface ActionableRecommendation {
   actionStep: string;
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// 14 SPECIFIC REPORT SECTION INTERFACES (MATCHING REFERENCE REPORT)
+// ═══════════════════════════════════════════════════════════════════
+
+// 1. Student Details Section
+export interface StudentDetailsSection {
+  studentName: string;
+  studentId: string;
+  examination: string;
+  className: string;
+  testNumber: string;
+  testDate: string;
+  testMode: string;
+  totalQuestions: number;
+  maximumMarks: number;
+}
+
+// 2. Overall Performance Section
+export interface OverallPerformanceSection {
+  totalMarks: number;
+  maximumMarks: number;
+  percentage: number;
+  correctAnswers: number;
+  incorrectAnswers: number;
+  unattempted: number;
+  accuracy: number;
+  overallPercentile: number | null;
+  estimatedRank: number | null;
+  performanceLevel: string; // e.g. "Excellent", "Very Good", "Good", "Needs Improvement"
+}
+
+// 3. Subject-Wise Analysis Section (Table + Total)
+export interface SubjectWiseAnalysisRow {
+  subject: string;
+  max: number;
+  score: number;
+  percentage: number;
+  correct: number;
+  wrong: number;
+  unattempted: number;
+  accuracy: number;
+}
+
+export interface SubjectWiseAnalysisSection {
+  rows: SubjectWiseAnalysisRow[];
+  total: SubjectWiseAnalysisRow;
+}
+
+// 4. Subject Performance (Diagnosis per subject)
+export interface SubjectPerformanceItem {
+  subjectName: string;
+  score: number;
+  maxScore: number;
+  performanceLevel: string;
+  strongAreas: string[];
+  areasRequiringImprovement: string[];
+  recommendation: string;
+}
+
+// 5. Topic-Wise Performance Section
+export interface TopicPerformanceRow {
+  topic: string;
+  subjectName: string;
+  accuracy: number;
+  status: 'Excellent' | 'Strong' | 'Needs Improvement' | 'Weak';
+  totalQuestions: number;
+  correct: number;
+  wrong: number;
+}
+
+// 6. Strength & Weakness Analysis
+export interface StrengthWeaknessSection {
+  topStrengths: string[];
+  priorityWeaknesses: string[];
+}
+
+// 7. Error Analysis Section
+export interface ErrorAnalysisCategory {
+  errorType: 'Conceptual Error' | 'Calculation Error' | 'Silly Mistake' | 'Misreading Question' | 'Guessing';
+  questionCount: number;
+  impact: 'High' | 'Medium' | 'Low';
+  description?: string;
+}
+
+export interface ErrorAnalysisSection {
+  categories: ErrorAnalysisCategory[];
+  totalWrong: number;
+  potentialRecoverableMarks: number;
+  narrative: string;
+}
+
+// 8. Time Management Section
+export interface TimeManagementRow {
+  section: string;
+  recommendedMinutes: number;
+  studentMinutes: number;
+  status: 'Optimal' | 'Slow' | 'Fast';
+}
+
+export interface TimeManagementStrategyRound {
+  round: string;
+  title: string;
+  description: string;
+}
+
+export interface TimeManagementSection {
+  rows: TimeManagementRow[];
+  reviewMinutes: {
+    recommended: number;
+    actual: number;
+  };
+  roundsStrategy: TimeManagementStrategyRound[];
+}
+
+// 9. Performance Trend Section
+export interface PerformanceTrendPoint {
+  testNumber: string;
+  testTitle: string;
+  date: string;
+  score: number;
+  maxScore: number;
+  percentile: number | null;
+  rank: number | null;
+}
+
+export interface PerformanceTrendSection {
+  history: PerformanceTrendPoint[];
+  trendSummary: string;
+  trajectory: 'UPWARD' | 'STABLE' | 'FLUCTUATING' | 'INSUFFICIENT_DATA';
+}
+
+// 10. Expected Performance Targets
+export interface ExpectedPerformanceSection {
+  currentScore: number;
+  maxScore: number;
+  shortTermTarget: number;
+  strongTarget: number;
+  excellentTarget: number;
+  actionableMessage: string;
+}
+
+// 11. 14-Day Improvement Plan Section
+export interface FourteenDayPlanDayBlock {
+  period: string; // e.g. "Days 1–3", "Day 12"
+  title: string;
+  subject?: string;
+  focusChapters: string[];
+  activities: string[];
+  practiceVolume?: string; // e.g. "50–75 questions/day"
+}
+
+export interface FourteenDayImprovementPlanSection {
+  blocks: FourteenDayPlanDayBlock[];
+}
+
+// 12. Personalized Action Checklist
+export interface PersonalizedActionChecklistSection {
+  items: Array<{
+    id: string;
+    text: string;
+    category: string;
+    isKeyAction: boolean;
+  }>;
+}
+
+// 13. Parent Summary Section
+export interface ParentSummarySection {
+  summaryParagraph: string;
+  keyHighlights: string[];
+  potentialScoreRange: string;
+}
+
+// 14. Brainros Performance Index Section
+export interface PerformanceIndexMetric {
+  dimension: string;
+  ratingStars: number; // 0 to 5
+  ratingLabel: string; // e.g. "4.0/5.0"
+}
+
+export interface BrainrosPerformanceIndexSection {
+  metrics: PerformanceIndexMetric[];
+  overallRating: string; // e.g. "VERY GOOD", "EXCELLENT", "GOOD"
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// COMPLETE MASTER REPORT INTERFACE
+// ═══════════════════════════════════════════════════════════════════
+
 export interface FullAnalysisReport {
   attemptId: string;
   examId: string;
@@ -156,6 +349,8 @@ export interface FullAnalysisReport {
   examTargetName: string;
   calculatedAt: Date;
   thresholdsUsed: PerformanceThresholds;
+  
+  // Legacy / granular structure for existing components
   overall: OverallPerformanceMetrics;
   subjects: {
     items: SubjectAnalyticsItem[];
@@ -171,4 +366,36 @@ export interface FullAnalysisReport {
   timeAnalysis: TimeAnalyticsReport;
   attemptStrategy: AttemptStrategyReport;
   recommendations: ActionableRecommendation[];
+
+  // 14 Canonical Sections (Matching Reference Design)
+  section1StudentDetails: StudentDetailsSection;
+  section2OverallPerformance: OverallPerformanceSection;
+  section3SubjectWiseAnalysis: SubjectWiseAnalysisSection;
+  section4SubjectPerformance: SubjectPerformanceItem[];
+  section5TopicWisePerformance: TopicPerformanceRow[];
+  section6StrengthWeakness: StrengthWeaknessSection;
+  section7ErrorAnalysis: ErrorAnalysisSection;
+  section8TimeManagement: TimeManagementSection;
+  section9PerformanceTrend: PerformanceTrendSection;
+  section10ExpectedPerformance: ExpectedPerformanceSection;
+  section11FourteenDayPlan: FourteenDayImprovementPlanSection;
+  section12ActionChecklist: PersonalizedActionChecklistSection;
+  section13ParentSummary: ParentSummarySection;
+  section14PerformanceIndex: BrainrosPerformanceIndexSection;
+
+  // Canonical Direct Aliases
+  studentDetails?: StudentDetailsSection;
+  overallPerformance?: OverallPerformanceSection;
+  subjectWiseAnalysis?: SubjectWiseAnalysisSection;
+  subjectPerformance?: SubjectPerformanceItem[];
+  topicWisePerformance?: TopicPerformanceRow[];
+  strengthWeaknessAnalysis?: StrengthWeaknessSection;
+  errorAnalysis?: ErrorAnalysisSection;
+  timeManagement?: TimeManagementSection;
+  performanceTrend?: PerformanceTrendSection;
+  expectedPerformance?: ExpectedPerformanceSection;
+  improvementPlan?: FourteenDayImprovementPlanSection;
+  actionChecklist?: PersonalizedActionChecklistSection;
+  parentSummary?: ParentSummarySection;
+  performanceIndex?: BrainrosPerformanceIndexSection;
 }

@@ -20,6 +20,7 @@ import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import compression from 'compression';
 import * as express from 'express';
+import * as path from 'path';
 import { validateEnvironment } from './common/config/environment-validation';
 
 export { validateEnvironment };
@@ -201,6 +202,17 @@ async function bootstrap() {
     credentials: true,
     optionsSuccessStatus: 204,
   });
+
+  // Serve locally-stored question images (fallback when Cloudinary is unavailable)
+  const uploadsDir = path.resolve(process.cwd(), 'storage', 'uploads');
+  app.use(
+    '/storage/uploads',
+    express.static(uploadsDir, {
+      maxAge: '7d',
+      immutable: true,
+      fallthrough: true,
+    }),
+  );
 
   // Register global validation pipe
   app.useGlobalPipes(

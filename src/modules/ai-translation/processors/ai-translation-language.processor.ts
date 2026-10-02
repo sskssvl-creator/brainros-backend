@@ -13,6 +13,7 @@ import {
   AI_TRANSLATION_QUEUE,
 } from '../constants/ai-translation.constants';
 import { LanguageTranslationProgress } from '../dto/ai-translation-upload.dto';
+import { buildTranslatedRichDoc } from '../../../common/utils/rich-content-validator';
 
 export interface AiTranslationLanguageJobData {
   jobId: string;
@@ -160,6 +161,10 @@ export class AiTranslationLanguageProcessor extends WorkerHost {
               const tr = transMap.get(evq.sequenceNumber);
               if (!tr) continue;
 
+              const translatedQContent = (evq as any).questionContent
+                ? buildTranslatedRichDoc((evq as any).questionContent, tr.question)
+                : null;
+
               // 1. QuestionTranslation
               if (evq.sourceQuestionId) {
                 await tx.questionTranslation.upsert({
@@ -173,10 +178,12 @@ export class AiTranslationLanguageProcessor extends WorkerHost {
                     questionId: evq.sourceQuestionId,
                     languageId,
                     questionText: tr.question,
+                    questionContent: translatedQContent,
                     explanation: evq.explanation,
                   },
                   update: {
                     questionText: tr.question,
+                    questionContent: translatedQContent,
                   },
                 });
               }
@@ -194,10 +201,12 @@ export class AiTranslationLanguageProcessor extends WorkerHost {
                   languageId,
                   languageCode,
                   questionText: tr.question,
+                  questionContent: translatedQContent,
                   explanation: evq.explanation,
                 },
                 update: {
                   questionText: tr.question,
+                  questionContent: translatedQContent,
                   languageCode,
                 },
               });
@@ -212,6 +221,9 @@ export class AiTranslationLanguageProcessor extends WorkerHost {
 
               for (const evOpt of evq.options) {
                 const optText = optMap[evOpt.optionKey] || evOpt.optionText;
+                const translatedOptContent = (evOpt as any).optionContent
+                  ? buildTranslatedRichDoc((evOpt as any).optionContent, optText)
+                  : null;
 
                 if (evOpt.sourceOptionId) {
                   await tx.questionOptionTranslation.upsert({
@@ -225,9 +237,11 @@ export class AiTranslationLanguageProcessor extends WorkerHost {
                       optionId: evOpt.sourceOptionId,
                       languageId,
                       optionText: optText,
+                      optionContent: translatedOptContent,
                     },
                     update: {
                       optionText: optText,
+                      optionContent: translatedOptContent,
                     },
                   });
                 }
@@ -244,9 +258,11 @@ export class AiTranslationLanguageProcessor extends WorkerHost {
                     languageId,
                     languageCode,
                     optionText: optText,
+                    optionContent: translatedOptContent,
                   },
                   update: {
                     optionText: optText,
+                    optionContent: translatedOptContent,
                     languageCode,
                   },
                 });

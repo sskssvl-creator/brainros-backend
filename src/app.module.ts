@@ -42,7 +42,7 @@ import { AiTranslationModule } from './modules/ai-translation/ai-translation.mod
     HealthModule,
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: ['.env.production', '.env.local', '.env'],
+      envFilePath: ['.env', '.env.local', '.env.production'],
     }),
     BullModule.forRootAsync({
       imports: [ConfigModule],

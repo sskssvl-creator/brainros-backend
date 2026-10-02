@@ -792,6 +792,7 @@ export class ResultService {
                   optionLabel: String.fromCharCode(64 + opt.displayOrder),
                   optionKey: o.optionKey || String.fromCharCode(64 + opt.displayOrder),
                   optionText: oTrans?.optionText || o.optionText || '',
+                  optionContent: oTrans?.optionContent || o.optionContent || null,
                   isCorrect: o.isCorrect,
                 };
               })
@@ -804,6 +805,7 @@ export class ResultService {
                   optionLabel: o.optionLabel || o.optionKey || '',
                   optionKey: o.optionKey || o.optionLabel || '',
                   optionText: oTrans?.optionText || o.optionText || '',
+                  optionContent: oTrans?.optionContent || o.optionContent || null,
                   isCorrect: o.isCorrect,
                 };
               });
@@ -813,6 +815,13 @@ export class ResultService {
           sectionName: eq.section?.name || 'General',
           questionType: eq.question.questionType,
           questionText: qTrans?.questionText || (eq.question as any).passage || '',
+          questionContent: qTrans?.questionContent || (eq.question as any).questionContent || null,
+          passageText: qTrans?.passageText || (eq.question as any).passage || null,
+          passageContent: qTrans?.passageContent || (eq.question as any).passageContent || null,
+          assertionText: qTrans?.assertionText || (eq.question as any).assertion || null,
+          assertionContent: qTrans?.assertionContent || (eq.question as any).assertionContent || null,
+          reasonText: qTrans?.reasonText || (eq.question as any).reason || null,
+          reasonContent: qTrans?.reasonContent || (eq.question as any).reasonContent || null,
           explanation: qTrans?.explanation || '',
           options,
           studentAnswer: answer
@@ -866,6 +875,13 @@ export class ResultService {
         sectionName: eq.section.name,
         questionType: eq.question.questionType,
         questionText: qTrans?.questionText || (eq.question as any).passage || '',
+        questionContent: qTrans?.questionContent || (eq.question as any).questionContent || null,
+        passageText: qTrans?.passageText || (eq.question as any).passage || null,
+        passageContent: qTrans?.passageContent || (eq.question as any).passageContent || null,
+        assertionText: qTrans?.assertionText || (eq.question as any).assertion || null,
+        assertionContent: qTrans?.assertionContent || (eq.question as any).assertionContent || null,
+        reasonText: qTrans?.reasonText || (eq.question as any).reason || null,
+        reasonContent: qTrans?.reasonContent || (eq.question as any).reasonContent || null,
         explanation: qTrans?.explanation || '',
         options: eq.question.options.map((o) => {
           const oTrans =
@@ -876,6 +892,7 @@ export class ResultService {
             optionLabel: o.optionLabel || o.optionKey || '',
             optionKey: o.optionKey || o.optionLabel || '',
             optionText: oTrans?.optionText || o.optionText || '',
+            optionContent: oTrans?.optionContent || o.optionContent || null,
             isCorrect: o.isCorrect,
           };
         }),
@@ -1296,6 +1313,7 @@ export class ResultService {
             : undefined,
         };
       }),
+      fullAnalysis,
     };
 
     return await this.pdfService.generateReportPdf(pdfData);

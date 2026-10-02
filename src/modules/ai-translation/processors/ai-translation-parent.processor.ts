@@ -12,9 +12,15 @@ import {
   AI_TRANSLATION_QUEUE,
 } from '../constants/ai-translation.constants';
 import { LanguageTranslationProgress } from '../dto/ai-translation-upload.dto';
+import {
+  extractTranslatableSegments,
+  reconstructTranslatedDocument,
+} from '../../../common/utils/rich-content-translation';
+import { extractPlainText } from '../../../common/utils/rich-content-text-extractor';
 
 export interface ManualQuestionItem {
   questionText: string;
+  questionContent?: any;
   difficulty?: 'EASY' | 'MEDIUM' | 'HARD' | 'VERY_HARD';
   type?:
     | 'SINGLE_CORRECT'
@@ -23,14 +29,22 @@ export interface ManualQuestionItem {
     | 'ASSERTION_REASON'
     | 'MATCH_FOLLOWING';
   optionA?: string;
+  optionAContent?: any;
   optionB?: string;
+  optionBContent?: any;
   optionC?: string;
+  optionCContent?: any;
   optionD?: string;
+  optionDContent?: any;
   correctAnswer?: string;
   correctAnswers?: string[];
   numericalAnswer?: number | string;
   assertion?: string;
+  assertionContent?: any;
   reason?: string;
+  reasonContent?: any;
+  passage?: string;
+  passageContent?: any;
   columnA?: Array<{ key: string; text: string }>;
   columnB?: Array<{ key: string; text: string }>;
   matchPairs?: Array<{ left: string; right: string }>;
@@ -418,26 +432,63 @@ export class AiTranslationParentProcessor extends WorkerHost {
         continue;
       }
 
-      const batchItems: QuestionBatchItem[] = untranslatedSlice.map((evq) => {
-        const optA = evq.options.find((o) => o.optionKey === 'A')?.optionText || '';
-        const optB = evq.options.find((o) => o.optionKey === 'B')?.optionText || '';
-        const optC = evq.options.find((o) => o.optionKey === 'C')?.optionText || '';
-        const optD = evq.options.find((o) => o.optionKey === 'D')?.optionText || '';
+      // Prepare rich segments and templates for each question in slice
+      const richItems = untranslatedSlice.map((evq) => {
+        const qExtracted = extractTranslatableSegments(evq.questionContent || evq.questionText);
+        const assertionExtracted =
+          evq.assertionContent || evq.assertion
+            ? extractTranslatableSegments(evq.assertionContent || evq.assertion)
+            : null;
+        const reasonExtracted =
+          evq.reasonContent || evq.reason
+            ? extractTranslatableSegments(evq.reasonContent || evq.reason)
+            : null;
+        const passageExtracted =
+          (evq as any).passageContent || (evq as any).passage
+            ? extractTranslatableSegments((evq as any).passageContent || (evq as any).passage)
+            : null;
+
+        const optA = evq.options.find((o) => o.optionKey === 'A');
+        const optB = evq.options.find((o) => o.optionKey === 'B');
+        const optC = evq.options.find((o) => o.optionKey === 'C');
+        const optD = evq.options.find((o) => o.optionKey === 'D');
+
+        const optAExtracted = extractTranslatableSegments(optA?.optionContent || optA?.optionText || '');
+        const optBExtracted = extractTranslatableSegments(optB?.optionContent || optB?.optionText || '');
+        const optCExtracted = extractTranslatableSegments(optC?.optionContent || optC?.optionText || '');
+        const optDExtracted = extractTranslatableSegments(optD?.optionContent || optD?.optionText || '');
 
         return {
           questionNumber: evq.sequenceNumber,
-          question: evq.questionText,
-          optionA: optA,
-          optionB: optB,
-          optionC: optC,
-          optionD: optD,
+          evq,
+          templates: {
+            question: qExtracted.template,
+            assertion: assertionExtracted?.template || null,
+            reason: reasonExtracted?.template || null,
+            passage: passageExtracted?.template || null,
+            optA: optAExtracted.template,
+            optB: optBExtracted.template,
+            optC: optCExtracted.template,
+            optD: optDExtracted.template,
+          },
+          batchItem: {
+            questionNumber: evq.sequenceNumber,
+            questionSegments: qExtracted.segments,
+            optionASegments: optAExtracted.segments,
+            optionBSegments: optBExtracted.segments,
+            optionCSegments: optCExtracted.segments,
+            optionDSegments: optDExtracted.segments,
+            assertionSegments: assertionExtracted?.segments,
+            reasonSegments: reasonExtracted?.segments,
+            passageSegments: passageExtracted?.segments,
+          },
         };
       });
 
       try {
         // Call Gemini through the Global Distributed Rate Limiter
-        const translatedBatch = await this.geminiTranslationService.translateBatch(
-          batchItems,
+        const translatedBatch = await this.geminiTranslationService.translateRichBatch(
+          richItems.map((r) => r.batchItem),
           languageName,
           languageCode,
         );
@@ -449,9 +500,41 @@ export class AiTranslationParentProcessor extends WorkerHost {
         // Upsert translations into DB atomically
         await this.prisma.$transaction(
           async (tx) => {
-            for (const evq of untranslatedSlice) {
+            for (const item of richItems) {
+              const { evq, templates } = item;
               const tr = transMap.get(evq.sequenceNumber);
               if (!tr) continue;
+
+              const translatedQuestionContent = reconstructTranslatedDocument(
+                templates.question,
+                tr.questionSegments,
+                evq.questionText,
+              );
+              const translatedQuestionText = extractPlainText(translatedQuestionContent) || evq.questionText;
+
+              const translatedAssertionContent =
+                tr.assertionSegments && templates.assertion
+                  ? reconstructTranslatedDocument(templates.assertion, tr.assertionSegments)
+                  : evq.assertionContent || null;
+              const translatedAssertionText = translatedAssertionContent
+                ? extractPlainText(translatedAssertionContent)
+                : evq.assertion || null;
+
+              const translatedReasonContent =
+                tr.reasonSegments && templates.reason
+                  ? reconstructTranslatedDocument(templates.reason, tr.reasonSegments)
+                  : evq.reasonContent || null;
+              const translatedReasonText = translatedReasonContent
+                ? extractPlainText(translatedReasonContent)
+                : evq.reason || null;
+
+              const translatedPassageContent =
+                tr.passageSegments && templates.passage
+                  ? reconstructTranslatedDocument(templates.passage, tr.passageSegments)
+                  : (evq as any).passageContent || null;
+              const translatedPassageText = translatedPassageContent
+                ? extractPlainText(translatedPassageContent)
+                : (evq as any).passage || null;
 
               // 1. QuestionTranslation
               if (evq.sourceQuestionId) {
@@ -465,11 +548,25 @@ export class AiTranslationParentProcessor extends WorkerHost {
                   create: {
                     questionId: evq.sourceQuestionId,
                     languageId,
-                    questionText: tr.question,
+                    questionText: translatedQuestionText,
+                    questionContent: translatedQuestionContent || null,
+                    assertionText: translatedAssertionText,
+                    assertionContent: translatedAssertionContent || null,
+                    reasonText: translatedReasonText,
+                    reasonContent: translatedReasonContent || null,
+                    passageText: translatedPassageText,
+                    passageContent: translatedPassageContent || null,
                     explanation: evq.explanation,
                   },
                   update: {
-                    questionText: tr.question,
+                    questionText: translatedQuestionText,
+                    questionContent: translatedQuestionContent || null,
+                    assertionText: translatedAssertionText,
+                    assertionContent: translatedAssertionContent || null,
+                    reasonText: translatedReasonText,
+                    reasonContent: translatedReasonContent || null,
+                    passageText: translatedPassageText,
+                    passageContent: translatedPassageContent || null,
                   },
                 });
               }
@@ -486,25 +583,43 @@ export class AiTranslationParentProcessor extends WorkerHost {
                   examVersionQuestionId: evq.id,
                   languageId,
                   languageCode,
-                  questionText: tr.question,
+                  questionText: translatedQuestionText,
+                  questionContent: translatedQuestionContent || null,
+                  assertionText: translatedAssertionText,
+                  assertionContent: translatedAssertionContent || null,
+                  reasonText: translatedReasonText,
+                  reasonContent: translatedReasonContent || null,
+                  passageText: translatedPassageText,
+                  passageContent: translatedPassageContent || null,
                   explanation: evq.explanation,
                 },
                 update: {
-                  questionText: tr.question,
+                  questionText: translatedQuestionText,
+                  questionContent: translatedQuestionContent || null,
+                  assertionText: translatedAssertionText,
+                  assertionContent: translatedAssertionContent || null,
+                  reasonText: translatedReasonText,
+                  reasonContent: translatedReasonContent || null,
+                  passageText: translatedPassageText,
+                  passageContent: translatedPassageContent || null,
                   languageCode,
                 },
               });
 
               // 3. QuestionOptionTranslation & ExamVersionOptionTranslation
-              const optMap: Record<string, string> = {
-                A: tr.optionA,
-                B: tr.optionB,
-                C: tr.optionC,
-                D: tr.optionD,
+              const optSegmentMap: Record<string, { segments: Record<string, string>; template: any }> = {
+                A: { segments: tr.optionASegments, template: templates.optA },
+                B: { segments: tr.optionBSegments, template: templates.optB },
+                C: { segments: tr.optionCSegments, template: templates.optC },
+                D: { segments: tr.optionDSegments, template: templates.optD },
               };
 
               for (const evOpt of evq.options) {
-                const optText = optMap[evOpt.optionKey] || evOpt.optionText;
+                const optData = optSegmentMap[evOpt.optionKey];
+                const optContent = optData
+                  ? reconstructTranslatedDocument(optData.template, optData.segments, evOpt.optionText)
+                  : evOpt.optionContent || null;
+                const optText = optContent ? extractPlainText(optContent) || evOpt.optionText : evOpt.optionText;
 
                 if (evOpt.sourceOptionId) {
                   await tx.questionOptionTranslation.upsert({
@@ -518,9 +633,11 @@ export class AiTranslationParentProcessor extends WorkerHost {
                       optionId: evOpt.sourceOptionId,
                       languageId,
                       optionText: optText,
+                      optionContent: optContent || null,
                     },
                     update: {
                       optionText: optText,
+                      optionContent: optContent || null,
                     },
                   });
                 }
@@ -537,9 +654,11 @@ export class AiTranslationParentProcessor extends WorkerHost {
                     languageId,
                     languageCode,
                     optionText: optText,
+                    optionContent: optContent || null,
                   },
                   update: {
                     optionText: optText,
+                    optionContent: optContent || null,
                     languageCode,
                   },
                 });
@@ -883,6 +1002,10 @@ export class AiTranslationParentProcessor extends WorkerHost {
           negativeMarks: negMarks,
           assertion: qType === 'ASSERTION_REASON' ? qData.assertion || null : null,
           reason: qType === 'ASSERTION_REASON' ? qData.reason || null : null,
+          questionContent: qData.questionContent || null,
+          passageContent: qData.passageContent || null,
+          assertionContent: qType === 'ASSERTION_REASON' ? qData.assertionContent || null : null,
+          reasonContent: qType === 'ASSERTION_REASON' ? qData.reasonContent || null : null,
           createdById: userId,
           isActive: true,
         } as any,
@@ -895,8 +1018,13 @@ export class AiTranslationParentProcessor extends WorkerHost {
             questionId: masterQ.id,
             languageId: defaultLangId,
             questionText: qData.questionText,
+            questionContent: qData.questionContent || null,
+            passageText: qData.passage || null,
+            passageContent: qData.passageContent || null,
             assertionText: qType === 'ASSERTION_REASON' ? qData.assertion || null : null,
+            assertionContent: qType === 'ASSERTION_REASON' ? qData.assertionContent || null : null,
             reasonText: qType === 'ASSERTION_REASON' ? qData.reason || null : null,
+            reasonContent: qType === 'ASSERTION_REASON' ? qData.reasonContent || null : null,
             explanation: qData.explanation || null,
           },
         });
@@ -906,10 +1034,10 @@ export class AiTranslationParentProcessor extends WorkerHost {
       const createdOpts: any[] = [];
       if (qType !== 'NUMERICAL') {
         const optDefs = [
-          { key: 'A', text: qData.optionA || '' },
-          { key: 'B', text: qData.optionB || '' },
-          { key: 'C', text: qData.optionC || '' },
-          { key: 'D', text: qData.optionD || '' },
+          { key: 'A', text: qData.optionA || '', content: qData.optionAContent || null },
+          { key: 'B', text: qData.optionB || '', content: qData.optionBContent || null },
+          { key: 'C', text: qData.optionC || '', content: qData.optionCContent || null },
+          { key: 'D', text: qData.optionD || '', content: qData.optionDContent || null },
         ];
 
         const multiCorrect = Array.isArray(qData.correctAnswers)
@@ -931,6 +1059,7 @@ export class AiTranslationParentProcessor extends WorkerHost {
               optionKey: optDef.key,
               optionLabel: optDef.key,
               optionText: optDef.text,
+              optionContent: optDef.content,
               isCorrect,
               displayOrder: oIdx + 1,
             },
@@ -1000,6 +1129,10 @@ export class AiTranslationParentProcessor extends WorkerHost {
           assertion: qType === 'ASSERTION_REASON' ? qData.assertion || null : null,
           reason: qType === 'ASSERTION_REASON' ? qData.reason || null : null,
           questionText: qData.questionText,
+          questionContent: qData.questionContent || null,
+          passageContent: qData.passageContent || null,
+          assertionContent: qType === 'ASSERTION_REASON' ? qData.assertionContent || null : null,
+          reasonContent: qType === 'ASSERTION_REASON' ? qData.reasonContent || null : null,
           explanation: qData.explanation || null,
           correctAnswer: snapshotCorrectAnswer,
         } as any,
@@ -1013,6 +1146,13 @@ export class AiTranslationParentProcessor extends WorkerHost {
             languageId: defaultLangId,
             languageCode: 'en',
             questionText: qData.questionText,
+            questionContent: qData.questionContent || null,
+            passageText: qData.passage || null,
+            passageContent: qData.passageContent || null,
+            assertionText: qType === 'ASSERTION_REASON' ? qData.assertion || null : null,
+            assertionContent: qType === 'ASSERTION_REASON' ? qData.assertionContent || null : null,
+            reasonText: qType === 'ASSERTION_REASON' ? qData.reason || null : null,
+            reasonContent: qType === 'ASSERTION_REASON' ? qData.reasonContent || null : null,
             explanation: qData.explanation || null,
           },
         });
@@ -1029,6 +1169,7 @@ export class AiTranslationParentProcessor extends WorkerHost {
             optionKey: opt.optionKey,
             optionLabel: opt.optionLabel,
             optionText: opt.optionText || '',
+            optionContent: opt.optionContent || null,
             isCorrect: opt.isCorrect,
           },
         });

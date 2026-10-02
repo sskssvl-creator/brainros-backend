@@ -28,6 +28,8 @@ import {
 } from '../dto/ai-translation-upload.dto';
 import { AiTranslationParentJobData } from '../processors/ai-translation-parent.processor';
 import { AiTranslationLanguageJobData } from '../processors/ai-translation-language.processor';
+import { extractPlainText } from '../../../common/utils/rich-content-text-extractor';
+import { buildTranslatedRichDoc } from '../../../common/utils/rich-content-validator';
 
 @Injectable()
 export class AiTranslationService {
@@ -1315,8 +1317,25 @@ export class AiTranslationService {
           languageName: string;
           languageCode: string;
           questionText: string;
-          options: { A: string; B: string; C: string; D: string };
+          questionContent?: any;
+          assertionText?: string | null;
+          assertionContent?: any;
+          reasonText?: string | null;
+          reasonContent?: any;
+          passageText?: string | null;
+          passageContent?: any;
+          options: {
+            A: string;
+            AContent?: any;
+            B: string;
+            BContent?: any;
+            C: string;
+            CContent?: any;
+            D: string;
+            DContent?: any;
+          };
         }>();
+
 
         // 1. First add from master question translations
         if (masterQ?.translations) {
@@ -1326,21 +1345,32 @@ export class AiTranslationService {
             const langCode = lang?.code || 'en';
             const langName = lang?.name || langCode.toUpperCase();
 
-            const optATrans = masterOptA?.translations.find((ot) => ot.languageId === langId)?.optionText;
-            const optBTrans = masterOptB?.translations.find((ot) => ot.languageId === langId)?.optionText;
-            const optCTrans = masterOptC?.translations.find((ot) => ot.languageId === langId)?.optionText;
-            const optDTrans = masterOptD?.translations.find((ot) => ot.languageId === langId)?.optionText;
+            const optATrans = masterOptA?.translations.find((ot) => ot.languageId === langId);
+            const optBTrans = masterOptB?.translations.find((ot) => ot.languageId === langId);
+            const optCTrans = masterOptC?.translations.find((ot) => ot.languageId === langId);
+            const optDTrans = masterOptD?.translations.find((ot) => ot.languageId === langId);
 
             translationMap.set(langId, {
               languageId: langId,
               languageName: langName,
               languageCode: langCode,
               questionText: mt.questionText || q.questionText,
+              questionContent: (mt as any).questionContent || (q as any).questionContent || null,
+              assertionText: (mt as any).assertionText || q.assertion || null,
+              assertionContent: (mt as any).assertionContent || (q as any).assertionContent || null,
+              reasonText: (mt as any).reasonText || q.reason || null,
+              reasonContent: (mt as any).reasonContent || (q as any).reasonContent || null,
+              passageText: (mt as any).passageText || q.passage || null,
+              passageContent: (mt as any).passageContent || (q as any).passageContent || null,
               options: {
-                A: optATrans || optionA?.optionText || '',
-                B: optBTrans || optionB?.optionText || '',
-                C: optCTrans || optionC?.optionText || '',
-                D: optDTrans || optionD?.optionText || '',
+                A: optATrans?.optionText || optionA?.optionText || '',
+                AContent: (optATrans as any)?.optionContent || (optionA as any)?.optionContent || null,
+                B: optBTrans?.optionText || optionB?.optionText || '',
+                BContent: (optBTrans as any)?.optionContent || (optionB as any)?.optionContent || null,
+                C: optCTrans?.optionText || optionC?.optionText || '',
+                CContent: (optCTrans as any)?.optionContent || (optionC as any)?.optionContent || null,
+                D: optDTrans?.optionText || optionD?.optionText || '',
+                DContent: (optDTrans as any)?.optionContent || (optionD as any)?.optionContent || null,
               },
             });
           }
@@ -1353,23 +1383,49 @@ export class AiTranslationService {
           const langCode = lang?.code || evt.languageCode || 'en';
           const langName = lang?.name || langCode.toUpperCase();
 
-          const optATrans = optionA?.translations.find((ot) => ot.languageId === langId || ot.languageCode === langCode)?.optionText;
-          const optBTrans = optionB?.translations.find((ot) => ot.languageId === langId || ot.languageCode === langCode)?.optionText;
-          const optCTrans = optionC?.translations.find((ot) => ot.languageId === langId || ot.languageCode === langCode)?.optionText;
-          const optDTrans = optionD?.translations.find((ot) => ot.languageId === langId || ot.languageCode === langCode)?.optionText;
+          const optATrans = optionA?.translations.find((ot) => ot.languageId === langId || ot.languageCode === langCode);
+          const optBTrans = optionB?.translations.find((ot) => ot.languageId === langId || ot.languageCode === langCode);
+          const optCTrans = optionC?.translations.find((ot) => ot.languageId === langId || ot.languageCode === langCode);
+          const optDTrans = optionD?.translations.find((ot) => ot.languageId === langId || ot.languageCode === langCode);
 
           const existing = translationMap.get(langId);
+
+          const rawQContent = (evt as any).questionContent || existing?.questionContent;
+          const effectiveQContent = rawQContent || ((q as any).questionContent ? buildTranslatedRichDoc((q as any).questionContent, evt.questionText || q.questionText) : null);
+
+          const rawAContent = (optATrans as any)?.optionContent || existing?.options?.AContent;
+          const effectiveAContent = rawAContent || ((optionA as any)?.optionContent ? buildTranslatedRichDoc((optionA as any).optionContent, optATrans?.optionText || optionA?.optionText) : null);
+
+          const rawBContent = (optBTrans as any)?.optionContent || existing?.options?.BContent;
+          const effectiveBContent = rawBContent || ((optionB as any)?.optionContent ? buildTranslatedRichDoc((optionB as any).optionContent, optBTrans?.optionText || optionB?.optionText) : null);
+
+          const rawCContent = (optCTrans as any)?.optionContent || existing?.options?.CContent;
+          const effectiveCContent = rawCContent || ((optionC as any)?.optionContent ? buildTranslatedRichDoc((optionC as any).optionContent, optCTrans?.optionText || optionC?.optionText) : null);
+
+          const rawDContent = (optDTrans as any)?.optionContent || existing?.options?.DContent;
+          const effectiveDContent = rawDContent || ((optionD as any)?.optionContent ? buildTranslatedRichDoc((optionD as any).optionContent, optDTrans?.optionText || optionD?.optionText) : null);
 
           translationMap.set(langId, {
             languageId: langId,
             languageName: langName,
             languageCode: langCode,
             questionText: evt.questionText || existing?.questionText || q.questionText,
+            questionContent: effectiveQContent,
+            assertionText: (evt as any).assertionText || existing?.assertionText || q.assertion || null,
+            assertionContent: (evt as any).assertionContent || existing?.assertionContent || (q as any).assertionContent || null,
+            reasonText: (evt as any).reasonText || existing?.reasonText || q.reason || null,
+            reasonContent: (evt as any).reasonContent || existing?.reasonContent || (q as any).reasonContent || null,
+            passageText: (evt as any).passageText || existing?.passageText || q.passage || null,
+            passageContent: (evt as any).passageContent || existing?.passageContent || (q as any).passageContent || null,
             options: {
-              A: optATrans || existing?.options.A || optionA?.optionText || '',
-              B: optBTrans || existing?.options.B || optionB?.optionText || '',
-              C: optCTrans || existing?.options.C || optionC?.optionText || '',
-              D: optDTrans || existing?.options.D || optionD?.optionText || '',
+              A: optATrans?.optionText || existing?.options.A || optionA?.optionText || '',
+              AContent: effectiveAContent,
+              B: optBTrans?.optionText || existing?.options.B || optionB?.optionText || '',
+              BContent: effectiveBContent,
+              C: optCTrans?.optionText || existing?.options.C || optionC?.optionText || '',
+              CContent: effectiveCContent,
+              D: optDTrans?.optionText || existing?.options.D || optionD?.optionText || '',
+              DContent: effectiveDContent,
             },
           });
         }
@@ -1378,11 +1434,22 @@ export class AiTranslationService {
           id: q.id,
           sequenceNumber: q.sequenceNumber,
           questionText: q.questionText,
+          questionContent: (q as any).questionContent || null,
+          assertionText: q.assertion || null,
+          assertionContent: (q as any).assertionContent || null,
+          reasonText: q.reason || null,
+          reasonContent: (q as any).reasonContent || null,
+          passageText: q.passage || null,
+          passageContent: (q as any).passageContent || null,
           options: {
             A: optionA?.optionText || '',
+            AContent: (optionA as any)?.optionContent || null,
             B: optionB?.optionText || '',
+            BContent: (optionB as any)?.optionContent || null,
             C: optionC?.optionText || '',
+            CContent: (optionC as any)?.optionContent || null,
             D: optionD?.optionText || '',
+            DContent: (optionD as any)?.optionContent || null,
           },
           translations: Array.from(translationMap.values()),
         };
@@ -1726,6 +1793,11 @@ export class AiTranslationService {
       const qType = qData.type || 'SINGLE_CORRECT';
       const qDifficulty = qData.difficulty || 'MEDIUM';
 
+      const rawQuestionText = extractPlainText(qData.questionContent || qData.questionText || '');
+      const rawAssertion = qType === 'ASSERTION_REASON' ? extractPlainText(qData.assertionContent || qData.assertion || '') : null;
+      const rawReason = qType === 'ASSERTION_REASON' ? extractPlainText(qData.reasonContent || qData.reason || '') : null;
+      const rawPassage = extractPlainText(qData.passageContent || qData.passage || '') || null;
+
       // Create master Question
       const masterQ = await this.prisma.question.create({
         data: {
@@ -1736,8 +1808,13 @@ export class AiTranslationService {
           difficultyLevel: qDifficulty as any,
           marks: marksPerQ,
           negativeMarks: negMarks,
-          assertion: qType === 'ASSERTION_REASON' ? qData.assertion || null : null,
-          reason: qType === 'ASSERTION_REASON' ? qData.reason || null : null,
+          assertion: rawAssertion,
+          assertionContent: qData.assertionContent || null,
+          reason: rawReason,
+          reasonContent: qData.reasonContent || null,
+          passage: rawPassage,
+          passageContent: qData.passageContent || null,
+          questionContent: qData.questionContent || null,
           createdById: userId,
           isActive: true,
         } as any,
@@ -1749,11 +1826,16 @@ export class AiTranslationService {
           data: {
             questionId: masterQ.id,
             languageId: defaultLangId,
-            questionText: qData.questionText,
-            assertionText: qType === 'ASSERTION_REASON' ? qData.assertion || null : null,
-            reasonText: qType === 'ASSERTION_REASON' ? qData.reason || null : null,
+            questionText: rawQuestionText,
+            questionContent: qData.questionContent || null,
+            assertionText: rawAssertion,
+            assertionContent: qData.assertionContent || null,
+            reasonText: rawReason,
+            reasonContent: qData.reasonContent || null,
+            passageText: rawPassage,
+            passageContent: qData.passageContent || null,
             explanation: qData.explanation || null,
-          },
+          } as any,
         });
       }
 
@@ -1761,10 +1843,10 @@ export class AiTranslationService {
       const createdOpts: any[] = [];
       if (qType !== 'NUMERICAL') {
         const optDefs = [
-          { key: 'A', text: qData.optionA || '' },
-          { key: 'B', text: qData.optionB || '' },
-          { key: 'C', text: qData.optionC || '' },
-          { key: 'D', text: qData.optionD || '' },
+          { key: 'A', text: qData.optionA || '', content: qData.optionAContent },
+          { key: 'B', text: qData.optionB || '', content: qData.optionBContent },
+          { key: 'C', text: qData.optionC || '', content: qData.optionCContent },
+          { key: 'D', text: qData.optionD || '', content: qData.optionDContent },
         ];
 
         const multiCorrect = Array.isArray(qData.correctAnswers)
@@ -1780,17 +1862,31 @@ export class AiTranslationService {
               ? multiCorrect.includes(optDef.key)
               : optDef.key === qData.correctAnswer;
 
+          const rawOptText = extractPlainText(optDef.content || optDef.text || '');
+
           const opt = await this.prisma.questionOption.create({
             data: {
               questionId: masterQ.id,
               optionKey: optDef.key,
               optionLabel: optDef.key,
-              optionText: optDef.text,
+              optionText: rawOptText,
+              optionContent: optDef.content || null,
               isCorrect,
               displayOrder: oIdx + 1,
-            },
+            } as any,
           });
-          createdOpts.push(opt);
+          createdOpts.push({ ...opt, optionContent: optDef.content || null });
+
+          if (defaultLangId) {
+            await this.prisma.questionOptionTranslation.create({
+              data: {
+                optionId: opt.id,
+                languageId: defaultLangId,
+                optionText: rawOptText,
+                optionContent: optDef.content || null,
+              } as any,
+            });
+          }
         }
       }
 
@@ -1852,9 +1948,14 @@ export class AiTranslationService {
           difficultyLevel: qDifficulty as any,
           marks: marksPerQ,
           negativeMarks: negMarks,
-          assertion: qType === 'ASSERTION_REASON' ? qData.assertion || null : null,
-          reason: qType === 'ASSERTION_REASON' ? qData.reason || null : null,
-          questionText: qData.questionText,
+          assertion: rawAssertion,
+          assertionContent: qData.assertionContent || null,
+          reason: rawReason,
+          reasonContent: qData.reasonContent || null,
+          passage: rawPassage,
+          passageContent: qData.passageContent || null,
+          questionText: rawQuestionText,
+          questionContent: qData.questionContent || null,
           explanation: qData.explanation || null,
           correctAnswer: snapshotCorrectAnswer,
         } as any,
@@ -1867,9 +1968,16 @@ export class AiTranslationService {
             examVersionQuestionId: evq.id,
             languageId: defaultLangId,
             languageCode: 'en',
-            questionText: qData.questionText,
+            questionText: rawQuestionText,
+            questionContent: qData.questionContent || null,
+            assertionText: rawAssertion,
+            assertionContent: qData.assertionContent || null,
+            reasonText: rawReason,
+            reasonContent: qData.reasonContent || null,
+            passageText: rawPassage,
+            passageContent: qData.passageContent || null,
             explanation: qData.explanation || null,
-          },
+          } as any,
         });
       }
 
@@ -1884,8 +1992,9 @@ export class AiTranslationService {
             optionKey: opt.optionKey,
             optionLabel: opt.optionLabel,
             optionText: opt.optionText || '',
+            optionContent: opt.optionContent || null,
             isCorrect: opt.isCorrect,
-          },
+          } as any,
         });
       }
 

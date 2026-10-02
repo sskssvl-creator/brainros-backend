@@ -6,6 +6,7 @@ import { DEFAULT_PERFORMANCE_THRESHOLDS } from './interfaces/analysis.interface'
 const prismaMock = {
   attempt: {
     findUnique: jest.fn(),
+    findMany: jest.fn(),
   },
   examQuestion: {
     findMany: jest.fn(),
@@ -180,6 +181,15 @@ describe('AnalysisEngineService', () => {
       };
 
       prismaMock.attempt.findUnique.mockResolvedValue(mockAttempt);
+      prismaMock.attempt.findMany.mockResolvedValue([
+        {
+          id: 'prev-attempt-1',
+          submittedAt: new Date(Date.now() - 86400000),
+          exam: { title: 'Test 01' },
+          result: { totalScore: 20, maxScore: 40, percentage: 50 },
+          candidateRanks: [{ rankType: 'OVERALL', percentile: 75.5 }],
+        },
+      ]);
       prismaMock.examQuestion.findMany.mockResolvedValue([
         {
           id: 'eq-1',
@@ -207,6 +217,36 @@ describe('AnalysisEngineService', () => {
       expect(report.timeAnalysis).toBeDefined();
       expect(report.attemptStrategy).toBeDefined();
       expect(report.recommendations.length).toBeGreaterThan(0);
+
+      // Verify All 14 Canonical Sections
+      expect(report.studentDetails).toBeDefined();
+      expect(report.studentDetails.totalQuestions).toBe(10);
+      expect(report.overallPerformance).toBeDefined();
+      expect(report.overallPerformance.totalMarks).toBe(26);
+      expect(report.overallPerformance.maximumMarks).toBe(40);
+      expect(report.subjectWiseAnalysis).toBeDefined();
+      expect(report.subjectWiseAnalysis.rows).toHaveLength(2);
+      expect(report.subjectWiseAnalysis.total.score).toBe(26);
+      expect(report.subjectPerformance).toBeDefined();
+      expect(report.subjectPerformance.length).toBe(2);
+      expect(report.topicWisePerformance).toBeDefined();
+      expect(report.strengthWeaknessAnalysis).toBeDefined();
+      expect(report.strengthWeaknessAnalysis.topStrengths.length).toBeGreaterThan(0);
+      expect(report.errorAnalysis).toBeDefined();
+      expect(report.errorAnalysis.totalWrong).toBe(2);
+      expect(report.timeManagement).toBeDefined();
+      expect(report.performanceTrend).toBeDefined();
+      expect(report.performanceTrend.history.length).toBeGreaterThan(0);
+      expect(report.expectedPerformance).toBeDefined();
+      expect(report.expectedPerformance.currentScore).toBe(26);
+      expect(report.improvementPlan).toBeDefined();
+      expect(report.improvementPlan.blocks.length).toBeGreaterThan(0);
+      expect(report.actionChecklist).toBeDefined();
+      expect(report.actionChecklist.items.length).toBeGreaterThan(0);
+      expect(report.parentSummary).toBeDefined();
+      expect(report.parentSummary.summaryParagraph.length).toBeGreaterThan(0);
+      expect(report.performanceIndex).toBeDefined();
+      expect(report.performanceIndex.metrics.length).toBe(6);
     });
   });
 });

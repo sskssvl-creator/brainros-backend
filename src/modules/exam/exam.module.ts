@@ -3,6 +3,8 @@ import { ExamController } from './exam.controller';
 import { PublicExamController } from './controllers/public-exam.controller';
 import { PublicContactController } from './controllers/public-contact.controller';
 import { ExamManagerController } from './controllers/exam-manager.controller';
+import { QuestionImageController } from './controllers/question-image.controller';
+import { StorageService } from '../../common/services/storage.service';
 import { ExamService } from './exam.service';
 import { ExamPaperParserService } from './services/exam-paper-parser.service';
 import { ExamPaperValidatorService } from './services/exam-paper-validator.service';
@@ -27,8 +29,10 @@ import { AdminModule } from '../admin/admin.module';
     PublicExamController,
     PublicContactController,
     ExamManagerController,
+    QuestionImageController,
   ],
   providers: [
+    StorageService,
     ExamService,
     ExamPaperParserService,
     ExamPaperValidatorService,

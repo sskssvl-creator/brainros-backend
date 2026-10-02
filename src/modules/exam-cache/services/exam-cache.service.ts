@@ -150,18 +150,26 @@ export class ExamCacheService {
           string,
           {
             questionText: string;
+            questionContent?: any;
             passageText?: string | null;
+            passageContent?: any;
             assertionText?: string | null;
+            assertionContent?: any;
             reasonText?: string | null;
+            reasonContent?: any;
           }
         > = {};
 
         for (const tr of vq.translations) {
           const transData = {
             questionText: tr.questionText,
+            questionContent: (tr as any).questionContent || (vq as any).questionContent || null,
             passageText: tr.passageText || null,
+            passageContent: (tr as any).passageContent || (vq as any).passageContent || null,
             assertionText: tr.assertionText || null,
+            assertionContent: (tr as any).assertionContent || (vq as any).assertionContent || null,
             reasonText: tr.reasonText || null,
+            reasonContent: (tr as any).reasonContent || (vq as any).reasonContent || null,
           };
           qTranslationsMap[tr.languageId] = transData;
           if (tr.languageCode) {
@@ -175,14 +183,16 @@ export class ExamCacheService {
 
         for (const vo of vq.options) {
           const optId = vo.sourceOptionId || vo.id;
-          const optTranslationsMap: Record<string, { optionText: string }> = {};
+          const optTranslationsMap: Record<string, { optionText: string; optionContent?: any }> = {};
 
           for (const ot of vo.translations) {
-            optTranslationsMap[ot.languageId] = { optionText: ot.optionText };
+            const optTransData = {
+              optionText: ot.optionText,
+              optionContent: (ot as any).optionContent || (vo as any).optionContent || null,
+            };
+            optTranslationsMap[ot.languageId] = optTransData;
             if (ot.languageCode) {
-              optTranslationsMap[ot.languageCode.toLowerCase()] = {
-                optionText: ot.optionText,
-              };
+              optTranslationsMap[ot.languageCode.toLowerCase()] = optTransData;
             }
           }
 
@@ -192,6 +202,7 @@ export class ExamCacheService {
             optionKey: vo.optionKey,
             optionLabel: vo.optionLabel || vo.optionText,
             optionText: vo.optionText,
+            optionContent: (vo as any).optionContent || null,
             displayOrder: vo.displayOrder,
             isCorrect: vo.isCorrect,
             translations: optTranslationsMap,
@@ -220,9 +231,13 @@ export class ExamCacheService {
           questionType: vq.type,
           difficultyLevel: vq.difficultyLevel,
           questionText: vq.questionText,
+          questionContent: (vq as any).questionContent || null,
           passage: vq.passage || null,
+          passageContent: (vq as any).passageContent || null,
           assertion: vq.assertion || null,
+          assertionContent: (vq as any).assertionContent || null,
           reason: vq.reason || null,
+          reasonContent: (vq as any).reasonContent || null,
           explanation: vq.explanation || null,
           correctAnswer: vq.correctAnswer,
           options: optionsList,
@@ -254,9 +269,13 @@ export class ExamCacheService {
           for (const tr of q.translations) {
             const transData = {
               questionText: tr.questionText,
+              questionContent: (tr as any).questionContent || null,
               passageText: tr.passageText || null,
+              passageContent: (tr as any).passageContent || null,
               assertionText: tr.assertionText || null,
+              assertionContent: (tr as any).assertionContent || null,
               reasonText: tr.reasonText || null,
+              reasonContent: (tr as any).reasonContent || null,
             };
             qTranslationsMap[tr.languageId] = transData;
             if (tr.language?.code) {
@@ -270,14 +289,16 @@ export class ExamCacheService {
 
         if (q.options && q.options.length > 0) {
           for (const opt of q.options) {
-            const optTranslationsMap: Record<string, { optionText: string }> = {};
+            const optTranslationsMap: Record<string, { optionText: string; optionContent?: any }> = {};
             if (opt.translations && opt.translations.length > 0) {
               for (const ot of opt.translations) {
-                optTranslationsMap[ot.languageId] = { optionText: ot.optionText };
+                const optTransObj = {
+                  optionText: ot.optionText,
+                  optionContent: (ot as any).optionContent || (opt as any).optionContent || null,
+                };
+                optTranslationsMap[ot.languageId] = optTransObj;
                 if (ot.language?.code) {
-                  optTranslationsMap[ot.language.code.toLowerCase()] = {
-                    optionText: ot.optionText,
-                  };
+                  optTranslationsMap[ot.language.code.toLowerCase()] = optTransObj;
                 }
               }
             }
@@ -288,6 +309,7 @@ export class ExamCacheService {
               optionKey: opt.optionKey || 'A',
               optionLabel: opt.optionLabel || opt.optionText || '',
               optionText: opt.optionText || opt.optionLabel || '',
+              optionContent: (opt as any).optionContent || null,
               displayOrder: opt.displayOrder,
               isCorrect: opt.isCorrect,
               translations: optTranslationsMap,
@@ -319,9 +341,13 @@ export class ExamCacheService {
           questionType: q.questionType?.code || 'SCQ',
           difficultyLevel: q.difficultyLevel,
           questionText: defaultQuestionText,
+          questionContent: (q as any).questionContent || (defaultTrans as any)?.questionContent || null,
           passage: q.passage || defaultTrans?.passageText || null,
+          passageContent: (q as any).passageContent || (defaultTrans as any)?.passageContent || null,
           assertion: q.assertion || defaultTrans?.assertionText || null,
+          assertionContent: (q as any).assertionContent || (defaultTrans as any)?.assertionContent || null,
           reason: q.reason || defaultTrans?.reasonText || null,
+          reasonContent: (q as any).reasonContent || (defaultTrans as any)?.reasonContent || null,
           explanation: null,
           correctAnswer: null,
           options: optionsList,

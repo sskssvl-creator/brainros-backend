@@ -1423,14 +1423,19 @@ export class ExamService {
           marks: marksPerQ,
           negativeMarks: negMarks,
           questionText: defaultTrans?.questionText || q.passage || 'Question statement',
+          questionContent: defaultTrans?.questionContent || (q as any).questionContent || null,
           passage: q.passage || defaultTrans?.passageText || null,
+          passageContent: defaultTrans?.passageContent || (q as any).passageContent || null,
           assertion: q.assertion || defaultTrans?.assertionText || null,
+          assertionContent: defaultTrans?.assertionContent || (q as any).assertionContent || null,
           reason: q.reason || defaultTrans?.reasonText || null,
+          reasonContent: defaultTrans?.reasonContent || (q as any).reasonContent || null,
           options: (q.options || []).map((opt: any) => ({
             id: opt.id,
             key: opt.optionKey,
             label: opt.optionLabel || opt.optionKey,
             text: opt.optionText || opt.translations?.[0]?.optionText || '',
+            content: opt.optionContent || opt.translations?.[0]?.optionContent || null,
             isCorrect: opt.isCorrect,
           })),
           correctAnswer: q.correctAnswer || q.answer?.correctOptionIds || null,
@@ -1566,9 +1571,13 @@ export class ExamService {
               marks: q.marks,
               negativeMarks: q.negativeMarks,
               passage: q.passage,
+              passageContent: q.passageContent || undefined,
               assertion: q.assertion,
+              assertionContent: q.assertionContent || undefined,
               reason: q.reason,
+              reasonContent: q.reasonContent || undefined,
               questionText: q.questionText,
+              questionContent: q.questionContent || undefined,
               explanation: q.explanation,
               correctAnswer: q.correctAnswer,
             },
@@ -1584,6 +1593,7 @@ export class ExamService {
                 optionKey: opt.key,
                 optionLabel: opt.label,
                 optionText: opt.text,
+                optionContent: opt.content || undefined,
                 isCorrect: opt.isCorrect,
               },
             });
@@ -1859,12 +1869,16 @@ export class ExamService {
             marks: q.marks || marksPerQ,
             negativeMarks: q.negativeMarks || negMarks,
             passage: q.passage,
+            passageContent: defaultTrans?.passageContent || (q as any).passageContent || undefined,
             assertion: q.assertion,
+            assertionContent: defaultTrans?.assertionContent || (q as any).assertionContent || undefined,
             reason: q.reason,
+            reasonContent: defaultTrans?.reasonContent || (q as any).reasonContent || undefined,
             questionText:
               defaultTrans?.questionText ||
               q.passage ||
               'Question statement',
+            questionContent: defaultTrans?.questionContent || (q as any).questionContent || undefined,
             explanation:
               q.explanation?.explanation || defaultTrans?.explanation || null,
             correctAnswer: q.correctAnswer || q.answer?.correctOptionIds || null,
@@ -1873,6 +1887,7 @@ export class ExamService {
 
         for (let optIdx = 0; optIdx < (q.options || []).length; optIdx++) {
           const opt = q.options[optIdx];
+          const optTrans = opt.translations?.[0];
           await tx.examVersionOption.create({
             data: {
               examVersionQuestionId: vQuestion.id,
@@ -1880,7 +1895,8 @@ export class ExamService {
               displayOrder: optIdx + 1,
               optionKey: opt.optionKey,
               optionLabel: opt.optionLabel || opt.optionKey,
-              optionText: opt.optionText || '',
+              optionText: optTrans?.optionText || opt.optionText || '',
+              optionContent: optTrans?.optionContent || (opt as any).optionContent || undefined,
               isCorrect: opt.isCorrect,
             },
           });

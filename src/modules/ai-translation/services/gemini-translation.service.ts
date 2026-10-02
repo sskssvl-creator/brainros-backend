@@ -15,6 +15,9 @@ export interface QuestionBatchItem {
   optionB: string;
   optionC: string;
   optionD: string;
+  assertion?: string;
+  reason?: string;
+  passage?: string;
 }
 
 export interface TranslatedQuestionBatchItem {
@@ -24,6 +27,33 @@ export interface TranslatedQuestionBatchItem {
   optionB: string;
   optionC: string;
   optionD: string;
+  assertion?: string;
+  reason?: string;
+  passage?: string;
+}
+
+export interface RichQuestionBatchItem {
+  questionNumber: number;
+  questionSegments: Record<string, string>;
+  optionASegments: Record<string, string>;
+  optionBSegments: Record<string, string>;
+  optionCSegments: Record<string, string>;
+  optionDSegments: Record<string, string>;
+  assertionSegments?: Record<string, string>;
+  reasonSegments?: Record<string, string>;
+  passageSegments?: Record<string, string>;
+}
+
+export interface TranslatedRichQuestionBatchItem {
+  questionNumber: number;
+  questionSegments: Record<string, string>;
+  optionASegments: Record<string, string>;
+  optionBSegments: Record<string, string>;
+  optionCSegments: Record<string, string>;
+  optionDSegments: Record<string, string>;
+  assertionSegments?: Record<string, string>;
+  reasonSegments?: Record<string, string>;
+  passageSegments?: Record<string, string>;
 }
 
 @Injectable()
@@ -76,7 +106,90 @@ export class GeminiTranslationService {
   }
 
   /**
-   * Translate a batch of questions to the target language through the Global Rate Limiter
+   * Translate a batch of rich questions (with isolated text segments)
+   */
+  async translateRichBatch(
+    questions: RichQuestionBatchItem[],
+    targetLanguageName: string,
+    targetLanguageCode: string,
+  ): Promise<TranslatedRichQuestionBatchItem[]> {
+    if (!questions || questions.length === 0) {
+      return [];
+    }
+
+    if (!this.genAI) {
+      const rawKey =
+        this.configService.get<string>('GEMINI_API_KEY') ||
+        process.env.GEMINI_API_KEY ||
+        '';
+      const apiKey = rawKey.trim().replace(/^["']|["']$/g, '');
+      if (!apiKey) {
+        throw new Error(
+          'GEMINI_API_KEY is missing. Please configure it in environment variables.',
+        );
+      }
+      this.genAI = new GoogleGenerativeAI(apiKey);
+    }
+
+    const prompt = this.buildRichPrompt(questions, targetLanguageName, targetLanguageCode);
+    const candidateModels = this.resolveCandidateModels();
+
+    let lastError: Error | null = null;
+
+    for (const modelId of candidateModels) {
+      const model = this.genAI.getGenerativeModel({
+        model: modelId,
+        generationConfig: {
+          responseMimeType: 'application/json',
+          temperature: 0.1,
+        },
+      });
+
+      for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+        const releaseSlot = await this.rateLimiter.acquireSlot();
+
+        try {
+          const result = await model.generateContent(prompt);
+          const responseText = result.response.text();
+          const parsed = this.parseAndValidateRichResponse(responseText, questions);
+          return parsed;
+        } catch (err: any) {
+          lastError = err;
+          const classified = GeminiErrorClassifier.classify(err, {
+            defaultRetryDelayMs: 5000,
+            retryBufferMs: this.retryBufferMs,
+          });
+
+          this.logger.warn(
+            `[${modelId}] Rich Translation attempt ${attempt}/${this.maxRetries} failed for ${targetLanguageName}: [${classified.kind}] ${err.message}`,
+          );
+
+          if (
+            classified.kind === GeminiErrorKind.AUTHENTICATION_ERROR ||
+            classified.kind === GeminiErrorKind.INVALID_REQUEST
+          ) {
+            throw new Error(classified.userFacingMessage);
+          }
+
+          if (classified.kind === GeminiErrorKind.MODEL_UNAVAILABLE) {
+            break;
+          }
+
+          if (attempt < this.maxRetries) {
+            const delay = classified.retryDelayMs || 2000 * Math.pow(2, attempt - 1);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+          }
+        } finally {
+          releaseSlot();
+        }
+      }
+    }
+
+    throw lastError || new Error(`Rich translation failed for language ${targetLanguageName}`);
+  }
+
+  /**
+   * Translate a batch of plain questions to the target language through the Global Rate Limiter
    */
   async translateBatch(
     questions: QuestionBatchItem[],
@@ -116,7 +229,6 @@ export class GeminiTranslationService {
       });
 
       for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
-        // Acquire global rate limit slot (coordinated across all workers & instances)
         const releaseSlot = await this.rateLimiter.acquireSlot();
 
         try {
@@ -135,7 +247,6 @@ export class GeminiTranslationService {
             `[${modelId}] Translation attempt ${attempt}/${this.maxRetries} failed for ${targetLanguageName}: [${classified.kind}] ${err.message}`,
           );
 
-          // Handle 401 Authentication & 400 Malformed requests -> Immediate fail
           if (
             classified.kind === GeminiErrorKind.AUTHENTICATION_ERROR ||
             classified.kind === GeminiErrorKind.INVALID_REQUEST
@@ -143,38 +254,13 @@ export class GeminiTranslationService {
             throw new Error(classified.userFacingMessage);
           }
 
-          // Handle Model Missing -> Skip to next model
           if (classified.kind === GeminiErrorKind.MODEL_UNAVAILABLE) {
             break;
           }
 
-          // Handle Daily Quota Exhaustion -> Pause globally and throw user-facing error
-          if (classified.kind === GeminiErrorKind.DAILY_QUOTA_EXHAUSTED) {
-            await this.rateLimiter.pauseGlobally(
-              3600000, // 1 hour pause
-              'Daily Gemini API Quota Exhausted',
-            );
-            throw new Error(classified.userFacingMessage);
-          }
-
-          // Handle Temporary 429 Rate Limit -> Pause globally across all workers
-          if (classified.kind === GeminiErrorKind.TEMPORARY_RATE_LIMIT) {
-            await this.rateLimiter.pauseGlobally(
-              classified.retryDelayMs,
-              `HTTP 429 for ${modelId}: ${err.message}`,
-            );
-          }
-
-          // If retryable and attempts remain, wait before next loop
-          if (classified.isRetryable && attempt < this.maxRetries) {
-            const waitMs = Math.max(classified.retryDelayMs, 2000);
-            this.logger.log(
-              `Waiting ${Math.round(waitMs / 1000)}s before retry attempt ${attempt + 1}...`,
-            );
-            await new Promise((res) => setTimeout(res, waitMs));
-          } else if (!classified.isRetryable) {
-            // Non-retryable error on this model -> switch model or throw
-            break;
+          if (attempt < this.maxRetries) {
+            const delay = classified.retryDelayMs || 2000 * Math.pow(2, attempt - 1);
+            await new Promise((resolve) => setTimeout(resolve, delay));
           }
         } finally {
           releaseSlot();
@@ -182,21 +268,53 @@ export class GeminiTranslationService {
       }
     }
 
-    const sanitizedMessage = GeminiErrorClassifier.sanitize(lastError);
-    throw new Error(sanitizedMessage);
+    throw lastError || new Error(`Translation failed for language ${targetLanguageName}`);
   }
 
   private resolveCandidateModels(): string[] {
-    const verified = AI_TRANSLATION_DEFAULTS.VERIFIED_MODELS;
-    const candidates = [this.modelName, ...verified];
-    return Array.from(new Set(candidates)).filter(
-      (m) =>
-        Boolean(m) &&
-        !m.includes('3.8') &&
-        !m.includes('3.6') &&
-        !m.includes('preview') &&
-        !m.includes('latest'),
-    );
+    const list = [this.modelName];
+    const FALLBACK_MODELS = [
+      'gemini-1.5-flash',
+      'gemini-1.5-pro',
+      'gemini-2.0-flash',
+      'gemini-2.5-flash',
+    ];
+    for (const f of FALLBACK_MODELS) {
+      if (!list.includes(f)) list.push(f);
+    }
+    return list;
+  }
+
+  private buildRichPrompt(
+    questions: RichQuestionBatchItem[],
+    targetLanguageName: string,
+    targetLanguageCode: string,
+  ): string {
+    return `You are a certified professional academic translator specializing in educational and competitive examination question papers.
+Translate the text segments within each question into ${targetLanguageName} (${targetLanguageCode}).
+
+STRICT TRANSLATION RULES:
+1. Translate each segment value into the native script of ${targetLanguageName} (e.g. Gujarati script for Gujarati, Devanagari script for Hindi/Marathi, Tamil script for Tamil, Telugu script for Telugu, Bengali script for Bengali, Malayalam script for Malayalam, Kannada script for Kannada).
+2. DO NOT change, add, or delete segment keys (e.g. seg_0, seg_1). Keep every key EXACTLY as provided.
+3. Preserve mathematical formulas, chemical equations, numerical values, and standard scientific units.
+4. Output strictly a valid JSON array of objects matching the input structure:
+[
+  {
+    "questionNumber": number,
+    "questionSegments": { "seg_0": "translated text in ${targetLanguageName}", ... },
+    "optionASegments": { "seg_1": "translated text in ${targetLanguageName}", ... },
+    "optionBSegments": { "seg_2": "translated text in ${targetLanguageName}", ... },
+    "optionCSegments": { "seg_3": "translated text in ${targetLanguageName}", ... },
+    "optionDSegments": { "seg_4": "translated text in ${targetLanguageName}", ... },
+    "assertionSegments": { ... },
+    "reasonSegments": { ... },
+    "passageSegments": { ... }
+  }
+]
+
+INPUT QUESTIONS AND SEGMENTS:
+${JSON.stringify(questions, null, 2)}
+`;
   }
 
   private buildPrompt(
@@ -274,11 +392,51 @@ ${JSON.stringify(questions, null, 2)}
         try {
           return JSON.parse(repaired);
         } catch (_) {
-          // Re-throw with clean message for retry classifier
           throw new Error(`Invalid JSON returned from AI model: ${firstErr.message}`);
         }
       }
     }
+  }
+
+  private parseAndValidateRichResponse(
+    responseText: string,
+    originalQuestions: RichQuestionBatchItem[],
+  ): TranslatedRichQuestionBatchItem[] {
+    const rawJson = this.extractAndCleanJson(responseText);
+
+    if (!Array.isArray(rawJson)) {
+      throw new Error('AI response is not a valid JSON array.');
+    }
+
+    const resultMap = new Map<number, TranslatedRichQuestionBatchItem>();
+
+    for (const item of rawJson) {
+      if (typeof item.questionNumber !== 'number') continue;
+      resultMap.set(item.questionNumber, {
+        questionNumber: item.questionNumber,
+        questionSegments: item.questionSegments || {},
+        optionASegments: item.optionASegments || {},
+        optionBSegments: item.optionBSegments || {},
+        optionCSegments: item.optionCSegments || {},
+        optionDSegments: item.optionDSegments || {},
+        assertionSegments: item.assertionSegments,
+        reasonSegments: item.reasonSegments,
+        passageSegments: item.passageSegments,
+      });
+    }
+
+    const translatedList: TranslatedRichQuestionBatchItem[] = [];
+    for (const orig of originalQuestions) {
+      const trans = resultMap.get(orig.questionNumber);
+      if (!trans) {
+        throw new Error(
+          `Missing translated item for rich question #${orig.questionNumber} from AI model.`,
+        );
+      }
+      translatedList.push(trans);
+    }
+
+    return translatedList;
   }
 
   private parseAndValidateResponse(
@@ -313,7 +471,6 @@ ${JSON.stringify(questions, null, 2)}
       });
     }
 
-    // Ensure all input questions have translations
     const translatedList: TranslatedQuestionBatchItem[] = [];
     for (const orig of originalQuestions) {
       const trans = resultMap.get(orig.questionNumber);

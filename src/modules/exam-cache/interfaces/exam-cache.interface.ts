@@ -6,9 +6,10 @@ export interface ExamOptionSnapshotItem {
   optionKey: string;
   optionLabel: string;
   optionText: string;
+  optionContent?: any;
   displayOrder: number;
   isCorrect?: boolean; // Kept in snapshot for evaluation/audit; omitted before sending to students
-  translations?: Record<string, { optionText: string }>;
+  translations?: Record<string, { optionText: string; optionContent?: any }>;
 }
 
 export interface ExamQuestionSnapshotItem {
@@ -23,9 +24,13 @@ export interface ExamQuestionSnapshotItem {
   questionType: string;
   difficultyLevel?: string;
   questionText: string;
+  questionContent?: any;
   passage?: string | null;
+  passageContent?: any;
   assertion?: string | null;
+  assertionContent?: any;
   reason?: string | null;
+  reasonContent?: any;
   explanation?: string | null; // Kept in snapshot for evaluation/audit; omitted before sending to students
   correctAnswer?: any; // Kept in snapshot for evaluation/audit; omitted before sending to students
   options: ExamOptionSnapshotItem[];
@@ -34,9 +39,13 @@ export interface ExamQuestionSnapshotItem {
     string,
     {
       questionText: string;
+      questionContent?: any;
       passageText?: string | null;
+      passageContent?: any;
       assertionText?: string | null;
+      assertionContent?: any;
       reasonText?: string | null;
+      reasonContent?: any;
     }
   >;
 }

@@ -13,6 +13,25 @@ import {
   ActionableRecommendation,
   QuestionTimeExtreme,
   SubjectBenchmarkComparison,
+  StudentDetailsSection,
+  OverallPerformanceSection,
+  SubjectWiseAnalysisSection,
+  SubjectPerformanceItem,
+  TopicPerformanceRow,
+  StrengthWeaknessSection,
+  ErrorAnalysisSection,
+  ErrorAnalysisCategory,
+  TimeManagementSection,
+  TimeManagementRow,
+  PerformanceTrendSection,
+  PerformanceTrendPoint,
+  ExpectedPerformanceSection,
+  FourteenDayImprovementPlanSection,
+  FourteenDayPlanDayBlock,
+  PersonalizedActionChecklistSection,
+  ParentSummarySection,
+  BrainrosPerformanceIndexSection,
+  PerformanceIndexMetric,
 } from '../interfaces/analysis.interface';
 
 @Injectable()
@@ -38,6 +57,18 @@ export class AnalysisEngineService {
   }
 
   /**
+   * Format performance level human readable label
+   */
+  getPerformanceLevelLabel(accuracy: number, percentage: number): string {
+    const metric = Math.max(accuracy, percentage);
+    if (metric >= 90) return 'Excellent';
+    if (metric >= 75) return 'Very Good';
+    if (metric >= 60) return 'Good';
+    if (metric >= 45) return 'Needs Improvement';
+    return 'Weak';
+  }
+
+  /**
    * Format seconds to human-readable string (e.g. "48m 20s", "1h 15m 30s")
    */
   formatDuration(seconds: number): string {
@@ -60,6 +91,13 @@ export class AnalysisEngineService {
     const attempt = await this.prisma.attempt.findUnique({
       where: { id: attemptId },
       include: {
+        student: {
+          include: {
+            user: true,
+            studentClass: true,
+            preferredLanguage: true,
+          },
+        },
         exam: {
           include: {
             examTarget: true,
@@ -92,6 +130,7 @@ export class AnalysisEngineService {
           },
         },
         timeLogs: true,
+        candidateRanks: true,
       },
     });
 
@@ -193,6 +232,15 @@ export class AnalysisEngineService {
     let slowestQ: QuestionTimeExtreme | null = null;
     let displayOrderCounter = 0;
 
+    // Error classification structures
+    const classifiedErrors = {
+      conceptual: 0,
+      calculation: 0,
+      silly: 0,
+      misreading: 0,
+      guessing: 0,
+    };
+
     for (const eq of examQuestions) {
       const ans = answerMap.get(eq.id);
       const q = eq.question;
@@ -225,17 +273,17 @@ export class AnalysisEngineService {
         (!!ans.selectedOptionId ||
           ans.numericalAnswer !== null ||
           !!ans.selectedOptions);
+      const isCorrect = this.isAnswerCorrect(q, ans);
+
       if (isAttemptedForTime && timeSpent > 0) {
-        const sectionName =
-          eq.section?.name || subjectName;
-        const isCorrectForExtreme = this.isAnswerCorrect(q, ans);
+        const sectionName = eq.section?.name || subjectName;
         const extremeEntry: QuestionTimeExtreme = {
           questionId: q.id,
           examQuestionId: eq.id,
           displayOrder: eq.displayOrder ?? displayOrderCounter,
           timeSeconds: timeSpent,
           sectionName,
-          isCorrect: isCorrectForExtreme,
+          isCorrect,
         };
 
         if (!fastestQ || timeSpent < fastestQ.timeSeconds) {
@@ -247,69 +295,198 @@ export class AnalysisEngineService {
       }
 
       // Check pacing
-      if (
-        timeSpent < 15 &&
-        ans &&
-        (ans.selectedOptionId || ans.numericalAnswer !== null)
-      ) {
-        rushedCount++;
-      } else if (timeSpent > avgTimePerQuestion * 2.5 && timeSpent > 60) {
-        overthoughtCount++;
-      } else {
-        optimalPaceCount++;
+      if (isAttemptedForTime) {
+        if (timeSpent > 0 && timeSpent < 20) {
+          rushedCount++;
+        } else if (timeSpent > avgTimePerQuestion * 2.5 && timeSpent > 45) {
+          overthoughtCount++;
+        } else {
+          optimalPaceCount++;
+        }
       }
 
+      // Review behavior
       if (ans?.isMarkedForReview) {
         markedForReviewCount++;
-      }
-
-      const isAttempted =
-        !!ans &&
-        (!!ans.selectedOptionId ||
-          ans.numericalAnswer !== null ||
-          !!ans.selectedOptions);
-
-      if (!isAttempted) {
-        unattemptedCountForTime++;
-        unattemptedTimeSum += timeSpent;
-        continue;
-      }
-
-      if (ans?.isMarkedForReview) {
-        markedAndAnsweredCount++;
-      }
-
-      // Check correctness
-      const isCorrect = this.isAnswerCorrect(q, ans);
-
-      if (isCorrect) {
-        correctCountForTime++;
-        correctTimeSum += timeSpent;
-        if (ans?.isMarkedForReview) {
-          markedAndCorrectCount++;
+        if (isAttemptedForTime) {
+          markedAndAnsweredCount++;
+          if (isCorrect) {
+            markedAndCorrectCount++;
+          } else {
+            markedAndWrongCount++;
+          }
         }
+      }
+
+      // Accumulate timing breakdown
+      if (!isAttemptedForTime) {
+        unattemptedTimeSum += timeSpent;
+        unattemptedCountForTime++;
+      } else if (isCorrect) {
+        correctTimeSum += timeSpent;
+        correctCountForTime++;
       } else {
-        wrongCountForTime++;
         wrongTimeSum += timeSpent;
-        totalNegativeMarksLost += eq.negativeMarks ?? exam.defaultNegativeMarks;
-        if (ans?.isMarkedForReview) {
-          markedAndWrongCount++;
+        wrongCountForTime++;
+        const negPerQ = exam.scoringRules?.[0]?.negativeMarksPerQuestion ?? 1;
+        totalNegativeMarksLost += Math.abs(negPerQ);
+
+        // Error Analysis Classification
+        const isNumerical = q.questionType?.code === 'NUM';
+        const isHardOrMedium = q.difficultyLevel === 'HARD' || q.difficultyLevel === 'MEDIUM';
+        if (timeSpent < 15) {
+          classifiedErrors.guessing++;
+        } else if (timeSpent < 30) {
+          classifiedErrors.misreading++;
+        } else if (isNumerical || (timeSpent >= avgTimePerQuestion && isHardOrMedium)) {
+          if (isNumerical || timeSpent < avgTimePerQuestion * 1.8) {
+            classifiedErrors.calculation++;
+          } else {
+            classifiedErrors.conceptual++;
+          }
+        } else if (q.difficultyLevel === 'EASY') {
+          classifiedErrors.silly++;
+        } else {
+          classifiedErrors.conceptual++;
         }
       }
     }
 
-    // ── 3. Overall Metrics ─────────────────────────────────────────────────
-    const speedAccuracyQuadrant = this.determineQuadrant(
-      result.accuracy,
-      avgTimePerQuestion,
-      (exam.durationMinutes * 60) / exam.totalQuestions,
-    );
+    // Benchmark time calculations
+    const subjectBenchmarkComparisons: SubjectBenchmarkComparison[] = [];
+    const totalQuestionsCount = Math.max(1, examQuestions.length);
+    for (const [sName, qCount] of subjectQuestionCountMap.entries()) {
+      const actualSec = subjectTimeMap.get(sName) || 0;
+      const proportion = qCount / totalQuestionsCount;
+      const recommendedSec = Math.round(
+        (exam.durationMinutes || 180) * 60 * proportion,
+      );
+      const deltaPercent =
+        recommendedSec > 0
+          ? Math.round(((actualSec - recommendedSec) / recommendedSec) * 100)
+          : 0;
+
+      let observation = 'Balanced time spent';
+      if (deltaPercent > 20)
+        observation = `Over-invested time (+${deltaPercent}%)`;
+      if (deltaPercent < -20)
+        observation = `Rushed through subject (${deltaPercent}%)`;
+
+      subjectBenchmarkComparisons.push({
+        subjectName: sName,
+        actualSeconds: actualSec,
+        recommendedSeconds: recommendedSec,
+        deltaPercent,
+        observation,
+      });
+    }
+
+    // ── 3. Subject Analytics & Identification ───────────────────────────────
+    const subjectItems: SubjectAnalyticsItem[] = [];
+    for (const sr of result.subjectResults) {
+      const sAccuracy = sr.accuracy;
+      const sTimeSpent = subjectTimeMap.get(sr.subject.name) || 0;
+      const sAvgTime =
+        sr.totalQuestions > 0
+          ? Math.round((sTimeSpent / sr.totalQuestions) * 10) / 10
+          : 0;
+      const sStatus = this.evaluateStatus(
+        sAccuracy,
+        sr.correctAnswers + sr.wrongAnswers,
+        thresholds,
+      );
+
+      subjectItems.push({
+        subjectId: sr.subjectId,
+        subjectName: sr.subject.name,
+        totalQuestions: sr.totalQuestions,
+        correct: sr.correctAnswers,
+        wrong: sr.wrongAnswers,
+        unattempted: sr.unattempted,
+        score: sr.score,
+        maxScore: sr.maxScore,
+        accuracy: sAccuracy,
+        percentage: sr.percentage ?? 0,
+        timeSpentSeconds: sTimeSpent,
+        avgTimePerQuestionSeconds: sAvgTime,
+        status: sStatus,
+        isStrongest: false,
+        isWeakest: false,
+      });
+    }
+
+    if (subjectItems.length > 0) {
+      let strongest = subjectItems[0];
+      let weakest = subjectItems[0];
+      for (const item of subjectItems) {
+        if (item.accuracy > strongest.accuracy) strongest = item;
+        if (item.accuracy < weakest.accuracy) weakest = item;
+      }
+      strongest.isStrongest = true;
+      weakest.isWeakest = true;
+    }
+
+    const strongestSubject = subjectItems.find((s) => s.isStrongest) || null;
+    const weakestSubject = subjectItems.find((s) => s.isWeakest) || null;
+
+    // ── 4. Chapter Analytics & Categorization ───────────────────────────────
+    const chapterItems: ChapterAnalyticsItem[] = [];
+    const masteredChapters: ChapterAnalyticsItem[] = [];
+    const revisionNeededChapters: ChapterAnalyticsItem[] = [];
+    const criticalFocusChapters: ChapterAnalyticsItem[] = [];
+
+    for (const cr of result.chapterResults) {
+      const cAccuracy = cr.accuracy;
+      const cTimeSpent = chapterTimeMap.get(cr.chapterId) || 0;
+      const cAvgTime =
+        cr.totalQuestions > 0
+          ? Math.round((cTimeSpent / cr.totalQuestions) * 10) / 10
+          : 0;
+      const cStatus = this.evaluateStatus(
+        cAccuracy,
+        cr.correctAnswers + cr.wrongAnswers,
+        thresholds,
+      );
+
+      const item: ChapterAnalyticsItem = {
+        chapterId: cr.chapterId,
+        chapterName: cr.chapter.name,
+        subjectId: cr.chapter.subjectId,
+        subjectName: cr.chapter.subject.name,
+        totalQuestions: cr.totalQuestions,
+        correct: cr.correctAnswers,
+        wrong: cr.wrongAnswers,
+        unattempted: cr.unattempted,
+        score: cr.score,
+        maxScore: cr.maxScore ?? 0,
+        accuracy: cAccuracy,
+        percentage: cr.percentage ?? 0,
+        timeSpentSeconds: cTimeSpent,
+        avgTimePerQuestionSeconds: cAvgTime,
+        status: cStatus,
+      };
+
+      chapterItems.push(item);
+      if (cStatus === 'EXCELLENT' || cStatus === 'STRONG') {
+        masteredChapters.push(item);
+      } else if (cStatus === 'GOOD' || cStatus === 'WEAK') {
+        revisionNeededChapters.push(item);
+      } else {
+        criticalFocusChapters.push(item);
+      }
+    }
+
+    // ── 5. Overall Performance Metrics ─────────────────────────────────────
     const overallStatus = this.evaluateStatus(
       result.accuracy,
       result.correctAnswers + result.wrongAnswers,
       thresholds,
     );
-    const potentialMarks = result.totalScore + totalNegativeMarksLost;
+    const speedAccuracyQuadrant = this.determineQuadrant(
+      result.accuracy,
+      avgTimePerQuestion,
+      (exam.durationMinutes * 60) / Math.max(1, result.totalQuestions),
+    );
 
     const overall: OverallPerformanceMetrics = {
       totalMarks: result.maxScore,
@@ -323,162 +500,16 @@ export class AnalysisEngineService {
       timeUsedSeconds: totalTimeUsedSeconds,
       formattedTimeUsed: this.formatDuration(totalTimeUsedSeconds),
       averageTimePerQuestionSeconds: avgTimePerQuestion,
-      negativeMarksLost: Math.round(totalNegativeMarksLost * 100) / 100,
-      potentialMarks: Math.round(potentialMarks * 100) / 100,
+      negativeMarksLost: totalNegativeMarksLost,
+      potentialMarks: result.totalScore + totalNegativeMarksLost,
       overallStatus,
       speedAccuracyQuadrant,
     };
 
-    // ── 4. Subject Analytics ───────────────────────────────────────────────
-    const subjectItems: SubjectAnalyticsItem[] = result.subjectResults.map(
-      (sr) => {
-        const timeSpent = subjectTimeMap.get(sr.subject.name) || 0;
-        const srAvgTime =
-          sr.totalQuestions > 0
-            ? Math.round((timeSpent / sr.totalQuestions) * 10) / 10
-            : 0;
-        const srPercentage =
-          sr.maxScore > 0
-            ? Math.round((sr.score / sr.maxScore) * 10000) / 100
-            : 0;
-        const srStatus = this.evaluateStatus(
-          sr.accuracy,
-          sr.correctAnswers + sr.wrongAnswers,
-          thresholds,
-        );
-
-        return {
-          subjectId: sr.subjectId,
-          subjectName: sr.subject.name,
-          totalQuestions: sr.totalQuestions,
-          correct: sr.correctAnswers,
-          wrong: sr.wrongAnswers,
-          unattempted: sr.unattempted,
-          score: sr.score,
-          maxScore: sr.maxScore,
-          accuracy: sr.accuracy,
-          percentage: srPercentage,
-          timeSpentSeconds: timeSpent,
-          avgTimePerQuestionSeconds: srAvgTime,
-          status: srStatus,
-          isStrongest: false,
-          isWeakest: false,
-        };
-      },
-    );
-
-    // Identify strongest & weakest subject
-    if (subjectItems.length > 0) {
-      let highestAcc = -1;
-      let lowestAcc = 999;
-      let strongIdx = 0;
-      let weakIdx = 0;
-
-      subjectItems.forEach((s, idx) => {
-        if (s.accuracy > highestAcc) {
-          highestAcc = s.accuracy;
-          strongIdx = idx;
-        }
-        if (s.accuracy < lowestAcc) {
-          lowestAcc = s.accuracy;
-          weakIdx = idx;
-        }
-      });
-
-      subjectItems[strongIdx].isStrongest = true;
-      if (subjectItems.length > 1) {
-        subjectItems[weakIdx].isWeakest = true;
-      }
-    }
-
-    const strongestSubject = subjectItems.find((s) => s.isStrongest) || null;
-    const weakestSubject = subjectItems.find((s) => s.isWeakest) || null;
-
-    // ── 5. Chapter Analytics (with Configurable Thresholds) ────────────────
-    const chapterItems: ChapterAnalyticsItem[] = result.chapterResults.map(
-      (cr) => {
-        const timeSpent = chapterTimeMap.get(cr.chapterId) || 0;
-        const crAvgTime =
-          cr.totalQuestions > 0
-            ? Math.round((timeSpent / cr.totalQuestions) * 10) / 10
-            : 0;
-        const crPercentage =
-          cr.maxScore && cr.maxScore > 0
-            ? Math.round((cr.score / cr.maxScore) * 10000) / 100
-            : cr.accuracy;
-
-        // Evaluated with configurable thresholds per exam
-        const crStatus = this.evaluateStatus(
-          cr.accuracy,
-          cr.correctAnswers + cr.wrongAnswers,
-          thresholds,
-        );
-
-        return {
-          chapterId: cr.chapterId,
-          chapterName: cr.chapter.name,
-          subjectId: cr.chapter.subjectId,
-          subjectName: cr.chapter.subject.name,
-          totalQuestions: cr.totalQuestions,
-          correct: cr.correctAnswers,
-          wrong: cr.wrongAnswers,
-          unattempted: cr.unattempted,
-          score: cr.score,
-          maxScore:
-            cr.maxScore ?? cr.totalQuestions * exam.defaultMarksPerQuestion,
-          accuracy: cr.accuracy,
-          percentage: crPercentage,
-          timeSpentSeconds: timeSpent,
-          avgTimePerQuestionSeconds: crAvgTime,
-          status: crStatus,
-        };
-      },
-    );
-
-    const masteredChapters = chapterItems.filter(
-      (c) => c.status === 'EXCELLENT' || c.status === 'STRONG',
-    );
-    const revisionNeededChapters = chapterItems.filter(
-      (c) => c.status === 'GOOD' || c.status === 'WEAK',
-    );
-    const criticalFocusChapters = chapterItems.filter(
-      (c) => c.status === 'CRITICAL',
-    );
-
     // ── 6. Time Analytics Report ───────────────────────────────────────────
-    const timeWastedSeconds = wrongTimeSum + unattemptedTimeSum;
-
-    // Subject benchmark comparisons
-    const numSubjects = subjectTimeMap.size || 1;
-    const totalExamSeconds = exam.durationMinutes * 60;
-    const subjectBenchmarkComparisons: SubjectBenchmarkComparison[] = [];
-
-    for (const [sName, actualSec] of subjectTimeMap.entries()) {
-      const subjectQCount = subjectQuestionCountMap.get(sName) || 1;
-      const recommendedSec = Math.round(
-        (subjectQCount / result.totalQuestions) * totalExamSeconds,
-      );
-      const deltaPct =
-        recommendedSec > 0
-          ? Math.round(((actualSec - recommendedSec) / recommendedSec) * 100)
-          : 0;
-
-      let observation = `Time allocation for ${sName} is within expected range.`;
-      if (deltaPct > 20) {
-        observation = `Spent ${deltaPct}% more time on ${sName} than recommended. Consider faster elimination strategies.`;
-      } else if (deltaPct < -20) {
-        observation = `Spent ${Math.abs(deltaPct)}% less time on ${sName} than recommended. Ensure you are not rushing through this subject.`;
-      }
-
-      subjectBenchmarkComparisons.push({
-        subjectName: sName,
-        actualSeconds: actualSec,
-        recommendedSeconds: recommendedSec,
-        deltaPercent: deltaPct,
-        observation,
-      });
-    }
-
+    const timeWastedSeconds = Math.round(
+      wrongTimeSum * 0.7 + unattemptedTimeSum * 0.5,
+    );
     const timeAnalysis: TimeAnalyticsReport = {
       totalExamDurationMinutes: exam.durationMinutes,
       totalTimeUsedSeconds,
@@ -541,7 +572,7 @@ export class AnalysisEngineService {
     }
     if (rushedCount >= 5) {
       strategicTakeaways.push(
-        `${rushedCount} questions were answered in under 15 seconds. Ensure you read all options carefully.`,
+        `${rushedCount} questions were answered in under 20 seconds. Ensure you read all options carefully.`,
       );
     }
     if (overthoughtCount >= 4) {
@@ -563,8 +594,6 @@ export class AnalysisEngineService {
       );
     }
 
-    // Over-attempting & under-attempting detection
-    const accuracy = result.accuracy;
     const wrongRatio =
       result.correctAnswers + result.wrongAnswers > 0
         ? (result.wrongAnswers / (result.correctAnswers + result.wrongAnswers)) *
@@ -620,6 +649,556 @@ export class AnalysisEngineService {
         defaultMarks: exam.defaultMarksPerQuestion,
       });
 
+    // ── 9. Fetch Historical Attempts for Trend Analysis ────────────────────
+    const previousAttempts = await this.prisma.attempt.findMany({
+      where: {
+        studentId: attempt.studentId,
+        status: { name: 'COMPLETED' },
+        result: { isNot: null },
+      },
+      include: {
+        exam: true,
+        result: true,
+        candidateRanks: true,
+      },
+      orderBy: { submittedAt: 'asc' },
+      take: 10,
+    });
+
+    // ── 10. Extract Rank / Percentile ──────────────────────────────────────
+    const overallRankRecord = attempt.candidateRanks?.find(
+      (r) => r.rankType === 'OVERALL',
+    ) || attempt.candidateRanks?.[0];
+
+    const overallPercentile = overallRankRecord?.percentile !== undefined
+      ? Math.round(overallRankRecord.percentile * 100) / 100
+      : null;
+    const estimatedRank = overallRankRecord?.rank ?? null;
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // BUILD ALL 14 CANONICAL SECTIONS MATCHING THE REFERENCE REPORT SPEC
+    // ═════════════════════════════════════════════════════════════════════════
+
+    // SECTION 1: Student Details
+    const student = attempt.student;
+    const testDateFormatted = (attempt.submittedAt || attempt.createdAt).toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric',
+    });
+
+    const section1StudentDetails: StudentDetailsSection = {
+      studentName: student?.name || student?.user?.name || 'Student',
+      studentId: student?.studentCode || student?.studentId || 'BR26-STU-001',
+      examination: exam.examTarget?.name ? `${exam.examTarget.name} Mock Test` : exam.title,
+      className: student?.studentClass?.name || '12th / 2nd PUC',
+      testNumber: (exam as any).code || exam.title,
+      testDate: testDateFormatted,
+      testMode: 'Online',
+      totalQuestions: result.totalQuestions,
+      maximumMarks: result.maxScore,
+    };
+
+    // SECTION 2: Overall Performance
+    const section2OverallPerformance: OverallPerformanceSection = {
+      totalMarks: result.totalScore,
+      maximumMarks: result.maxScore,
+      percentage: Math.round(result.percentage * 100) / 100,
+      correctAnswers: result.correctAnswers,
+      incorrectAnswers: result.wrongAnswers,
+      unattempted: result.unattempted,
+      accuracy: Math.round(result.accuracy * 100) / 100,
+      overallPercentile,
+      estimatedRank,
+      performanceLevel: this.getPerformanceLevelLabel(result.accuracy, result.percentage),
+    };
+
+    // SECTION 3: Subject-Wise Analysis
+    const subjectWiseRows = subjectItems.map((s) => ({
+      subject: s.subjectName,
+      max: s.maxScore,
+      score: s.score,
+      percentage: Math.round(s.percentage * 10) / 10,
+      correct: s.correct,
+      wrong: s.wrong,
+      unattempted: s.unattempted,
+      accuracy: Math.round(s.accuracy * 100) / 100,
+    }));
+
+    const section3SubjectWiseAnalysis: SubjectWiseAnalysisSection = {
+      rows: subjectWiseRows,
+      total: {
+        subject: 'TOTAL',
+        max: result.maxScore,
+        score: result.totalScore,
+        percentage: Math.round(result.percentage * 10) / 10,
+        correct: result.correctAnswers,
+        wrong: result.wrongAnswers,
+        unattempted: result.unattempted,
+        accuracy: Math.round(result.accuracy * 100) / 100,
+      },
+    };
+
+    // SECTION 4: Subject Performance (Per-Subject Diagnosis)
+    const section4SubjectPerformance: SubjectPerformanceItem[] = subjectItems.map((s) => {
+      const subjectChapters = chapterItems.filter((c) => c.subjectId === s.subjectId || c.subjectName === s.subjectName);
+      const strongChapters = subjectChapters
+        .filter((c) => c.accuracy >= 75)
+        .map((c) => c.chapterName);
+      const weakChapters = subjectChapters
+        .filter((c) => c.accuracy < 70)
+        .map((c) => c.chapterName);
+
+      const strongAreas = strongChapters.length > 0
+        ? strongChapters.slice(0, 4)
+        : subjectChapters.sort((a, b) => b.accuracy - a.accuracy).slice(0, 2).map((c) => c.chapterName);
+
+      const areasRequiringImprovement = weakChapters.length > 0
+        ? weakChapters.slice(0, 4)
+        : ['Advanced problem solving & numerical precision'];
+
+      let recommendation = `Maintain steady consistency in ${s.subjectName}. Target: ${Math.min(s.maxScore, Math.round(s.score + (s.maxScore - s.score) * 0.5))}+ marks.`;
+      if (s.accuracy < 65) {
+        recommendation = `Focus on concept application, formula derivation, and high-frequency numerical practice in ${s.subjectName}. Target: ${Math.min(s.maxScore, Math.round(s.score + 25))}+.`;
+      } else if (s.accuracy >= 85) {
+        recommendation = `Outstanding performance in ${s.subjectName}. Continue rigorous mock tests to sustain speed and maintain 90%+ accuracy.`;
+      }
+
+      return {
+        subjectName: s.subjectName,
+        score: s.score,
+        maxScore: s.maxScore,
+        performanceLevel: this.getPerformanceLevelLabel(s.accuracy, s.percentage),
+        strongAreas,
+        areasRequiringImprovement,
+        recommendation,
+      };
+    });
+
+    // SECTION 5: Topic-Wise Performance
+    const section5TopicWisePerformance: TopicPerformanceRow[] = chapterItems.map((c) => {
+      let status: 'Excellent' | 'Strong' | 'Needs Improvement' | 'Weak' = 'Needs Improvement';
+      if (c.accuracy >= 90) status = 'Excellent';
+      else if (c.accuracy >= 75) status = 'Strong';
+      else if (c.accuracy >= 60) status = 'Needs Improvement';
+      else status = 'Weak';
+
+      return {
+        topic: c.chapterName,
+        subjectName: c.subjectName,
+        accuracy: Math.round(c.accuracy * 100) / 100,
+        status,
+        totalQuestions: c.totalQuestions,
+        correct: c.correct,
+        wrong: c.wrong,
+      };
+    }).sort((a, b) => b.accuracy - a.accuracy);
+
+    // SECTION 6: Strength & Weakness Analysis
+    const topStrengths: string[] = [];
+    if (strongestSubject && strongestSubject.accuracy >= 75) {
+      topStrengths.push(`${strongestSubject.subjectName} conceptual mastery & accuracy (${strongestSubject.accuracy}%)`);
+    }
+    if (masteredChapters.length > 0) {
+      const topChaps = masteredChapters.slice(0, 3).map((c) => c.chapterName).join(', ');
+      topStrengths.push(`High accuracy in core chapters: ${topChaps}`);
+    }
+    if (totalNegativeMarksLost <= 6) {
+      topStrengths.push('Disciplined question selection with controlled negative marking loss');
+    }
+    if (speedAccuracyQuadrant === 'FAST_AND_ACCURATE' || speedAccuracyQuadrant === 'SLOW_AND_ACCURATE') {
+      topStrengths.push('Consistent problem-solving accuracy across standard question formats');
+    }
+    if (topStrengths.length < 3) {
+      topStrengths.push('Strong foundational attempt commitment across scheduled test duration');
+    }
+
+    const priorityWeaknesses: string[] = [];
+    if (weakestSubject && weakestSubject.accuracy < 70) {
+      priorityWeaknesses.push(`${weakestSubject.subjectName} problem-solving depth (${weakestSubject.accuracy}% accuracy)`);
+    }
+    if (criticalFocusChapters.length > 0) {
+      const critChaps = criticalFocusChapters.slice(0, 3).map((c) => c.chapterName).join(', ');
+      priorityWeaknesses.push(`Underperforming chapters requiring revision: ${critChaps}`);
+    }
+    if (totalNegativeMarksLost >= 8) {
+      priorityWeaknesses.push(`Avoidable negative marking penalty (−${totalNegativeMarksLost} marks lost)`);
+    }
+    if (classifiedErrors.calculation >= 3) {
+      priorityWeaknesses.push('Calculation precision and multi-step algebraic simplification');
+    }
+    if (result.unattempted >= 15) {
+      priorityWeaknesses.push('Time allocation & question scanning speed for unattempted questions');
+    }
+    if (priorityWeaknesses.length < 3) {
+      priorityWeaknesses.push('Final review round discipline and option elimination technique');
+    }
+
+    const section6StrengthWeakness: StrengthWeaknessSection = {
+      topStrengths: topStrengths.slice(0, 4),
+      priorityWeaknesses: priorityWeaknesses.slice(0, 4),
+    };
+
+    // SECTION 7: Error Analysis
+    const totalWrongCount = result.wrongAnswers;
+    const errorCategories: ErrorAnalysisCategory[] = [
+      {
+        errorType: 'Conceptual Error',
+        questionCount: Math.max(0, classifiedErrors.conceptual),
+        impact: classifiedErrors.conceptual >= 5 ? 'High' : 'Medium',
+        description: 'Gap in underlying theoretical fundamentals or principle application',
+      },
+      {
+        errorType: 'Calculation Error',
+        questionCount: Math.max(0, classifiedErrors.calculation),
+        impact: classifiedErrors.calculation >= 4 ? 'High' : 'Medium',
+        description: 'Arithmetic slips, unit conversion errors, or formula simplification slips',
+      },
+      {
+        errorType: 'Silly Mistake',
+        questionCount: Math.max(0, classifiedErrors.silly),
+        impact: classifiedErrors.silly >= 3 ? 'Medium' : 'Low',
+        description: 'Overlooking given values or bubbling wrong option on straightforward questions',
+      },
+      {
+        errorType: 'Misreading Question',
+        questionCount: Math.max(0, classifiedErrors.misreading),
+        impact: classifiedErrors.misreading >= 3 ? 'Medium' : 'Low',
+        description: 'Missed keywords such as "INCORRECT", "EXCEPT", or "NOT TRUE"',
+      },
+      {
+        errorType: 'Guessing',
+        questionCount: Math.max(0, classifiedErrors.guessing),
+        impact: classifiedErrors.guessing >= 3 ? 'Medium' : 'Low',
+        description: 'Low-confidence attempts made under rushed time pressure',
+      },
+    ];
+
+    // If total wrong has questions not yet assigned, allocate remainder proportionally
+    const assignedErrors = errorCategories.reduce((acc, c) => acc + c.questionCount, 0);
+    if (totalWrongCount > assignedErrors && errorCategories.length > 0) {
+      errorCategories[0].questionCount += totalWrongCount - assignedErrors;
+    }
+
+    const recoverableMistakes = (classifiedErrors.calculation + classifiedErrors.silly + classifiedErrors.misreading + classifiedErrors.guessing);
+    const potentialRecoverableMarks = Math.round(
+      recoverableMistakes * (exam.defaultMarksPerQuestion || 4) + totalNegativeMarksLost * 0.75,
+    );
+
+    const section7ErrorAnalysis: ErrorAnalysisSection = {
+      categories: errorCategories,
+      totalWrong: totalWrongCount,
+      potentialRecoverableMarks: Math.max(0, potentialRecoverableMarks),
+      narrative: potentialRecoverableMarks > 0
+        ? `Approximately ${potentialRecoverableMarks} marks could potentially be recovered by reducing avoidable calculation, reading, and silly mistakes. Maintain an Error Notebook after every BRAINROS test.`
+        : 'Excellent accuracy discipline observed with minimal avoidable errors. Keep maintaining precision during mock testing.',
+    };
+
+    // SECTION 8: Time Management
+    const timeRows: TimeManagementRow[] = subjectBenchmarkComparisons.map((b) => ({
+      section: b.subjectName,
+      recommendedMinutes: Math.round(b.recommendedSeconds / 60),
+      studentMinutes: Math.round(b.actualSeconds / 60),
+      status: b.deltaPercent > 20 ? 'Slow' : b.deltaPercent < -20 ? 'Fast' : 'Optimal',
+    }));
+
+    const section8TimeManagement: TimeManagementSection = {
+      rows: timeRows,
+      reviewMinutes: {
+        recommended: 20,
+        actual: Math.max(0, Math.round(exam.durationMinutes - totalTimeUsedSeconds / 60)),
+      },
+      roundsStrategy: [
+        {
+          round: 'Round 1 (First 50–60 mins)',
+          title: 'Direct & Easy Questions',
+          description: 'Solve all 100% confident, single-step questions instantly across all subjects.',
+        },
+        {
+          round: 'Round 2 (Next 60–70 mins)',
+          title: 'Moderate & Standard Problems',
+          description: 'Tackle multi-step conceptual problems requiring standard formulas and derivations.',
+        },
+        {
+          round: 'Round 3 (Next 25–30 mins)',
+          title: 'Difficult / Lengthy Numericals',
+          description: 'Attempt challenging calculations and complex assertion-reason questions.',
+        },
+        {
+          round: 'Final 15–20 minutes',
+          title: 'Verification & Review',
+          description: 'Review marked questions, check calculations, and confirm no answers were skipped accidentally.',
+        },
+      ],
+    };
+
+    // SECTION 9: Performance Trend
+    const historyPoints: PerformanceTrendPoint[] = previousAttempts.map((pa, idx) => {
+      const pScore = pa.result?.totalScore ?? 0;
+      const pMax = pa.result?.maxScore ?? exam.totalMarks;
+      const pRankRec = pa.candidateRanks?.[0];
+      const pPercentile = pRankRec?.percentile ? Math.round(pRankRec.percentile * 100) / 100 : null;
+
+      return {
+        testNumber: `Test 0${idx + 1}`,
+        testTitle: pa.exam?.title || `BRAINROS Mock Test - ${idx + 1}`,
+        date: (pa.submittedAt || pa.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
+        score: pScore,
+        maxScore: pMax,
+        percentile: pPercentile,
+        rank: pRankRec?.rank ?? null,
+      };
+    });
+
+    // Ensure current test is included if not already in history
+    if (!historyPoints.some((p) => p.testTitle === exam.title)) {
+      historyPoints.push({
+        testNumber: `Test 0${historyPoints.length + 1}`,
+        testTitle: exam.title,
+        date: (attempt.submittedAt || attempt.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
+        score: result.totalScore,
+        maxScore: result.maxScore,
+        percentile: overallPercentile,
+        rank: estimatedRank,
+      });
+    }
+
+    let trajectory: 'UPWARD' | 'STABLE' | 'FLUCTUATING' | 'INSUFFICIENT_DATA' = 'INSUFFICIENT_DATA';
+    let trendSummary = `Baseline performance recorded at ${result.totalScore}/${result.maxScore} marks.`;
+    if (historyPoints.length >= 2) {
+      const scores = historyPoints.map((h) => h.score);
+      const isAscending = scores.every((val, i, arr) => i === 0 || val >= arr[i - 1]);
+      const isDescending = scores.every((val, i, arr) => i === 0 || val <= arr[i - 1]);
+
+      if (isAscending) {
+        trajectory = 'UPWARD';
+        trendSummary = `Trend: ${scores.join(' → ')}. Consistent upward performance trend across mock tests.`;
+      } else if (isDescending) {
+        trajectory = 'FLUCTUATING';
+        trendSummary = `Trend: ${scores.join(' → ')}. Score dip observed. Prioritize high-yield revision and error analysis.`;
+      } else {
+        trajectory = 'STABLE';
+        trendSummary = `Trend: ${scores.join(' → ')}. Steady preparation level maintained with opportunities for score breakout.`;
+      }
+    }
+
+    const section9PerformanceTrend: PerformanceTrendSection = {
+      history: historyPoints,
+      trendSummary,
+      trajectory,
+    };
+
+    // SECTION 10: Expected Performance Targets
+    const currScore = result.totalScore;
+    const maxScore = result.maxScore;
+    const shortTerm = Math.min(maxScore, currScore + Math.max(20, Math.round((maxScore - currScore) * 0.25)));
+    const strongTarget = Math.min(maxScore, currScore + Math.max(45, Math.round((maxScore - currScore) * 0.5)));
+    const excellentTarget = Math.min(maxScore, Math.max(strongTarget + 20, Math.round(maxScore * 0.92)));
+
+    const section10ExpectedPerformance: ExpectedPerformanceSection = {
+      currentScore: currScore,
+      maxScore,
+      shortTermTarget: shortTerm,
+      strongTarget: strongTarget,
+      excellentTarget: excellentTarget,
+      actionableMessage: 'Focus on accuracy, revision of priority weak chapters, and elimination of avoidable calculation mistakes to move to the next competitive bracket.',
+    };
+
+    // SECTION 11: 14-Day Improvement Plan
+    const sortedWeakChapters = [...criticalFocusChapters, ...revisionNeededChapters, ...chapterItems]
+      .filter((v, i, a) => a.findIndex((t) => t.chapterId === v.chapterId) === i)
+      .sort((a, b) => a.accuracy - b.accuracy);
+
+    const s1Chaps = sortedWeakChapters.filter((c) => c.subjectName === (subjectItems[0]?.subjectName || 'Physics')).slice(0, 3).map((c) => c.chapterName);
+    const s2Chaps = sortedWeakChapters.filter((c) => c.subjectName === (subjectItems[1]?.subjectName || 'Chemistry')).slice(0, 3).map((c) => c.chapterName);
+    const s3Chaps = sortedWeakChapters.filter((c) => c.subjectName === (subjectItems[2]?.subjectName || 'Biology') || c.subjectName === (subjectItems[2]?.subjectName || 'Mathematics')).slice(0, 3).map((c) => c.chapterName);
+
+    const blocks: FourteenDayPlanDayBlock[] = [
+      {
+        period: 'Days 1–3',
+        title: `${subjectItems[0]?.subjectName || 'Physics'} Focus & Numerical Drilling`,
+        subject: subjectItems[0]?.subjectName || 'Physics',
+        focusChapters: s1Chaps.length > 0 ? s1Chaps : ['Mechanics', 'Electrostatics', 'Optics'],
+        activities: [
+          'Core formula derivation and concept reinforcement',
+          'Solve 50–75 standard numerical problems daily',
+          'Review previous mistakes and note key traps',
+        ],
+        practiceVolume: '50–75 questions/day',
+      },
+      {
+        period: 'Days 4–6',
+        title: `${subjectItems[1]?.subjectName || 'Chemistry'} High-Yield & Physical Chemistry`,
+        subject: subjectItems[1]?.subjectName || 'Chemistry',
+        focusChapters: s2Chaps.length > 0 ? s2Chaps : ['Equilibrium', 'Electrochemistry', 'Organic Mechanisms'],
+        activities: [
+          'Physical Chemistry calculation drills & formula sheet revision',
+          'NCERT line-by-line reading for Inorganic reactions',
+          'Reaction mechanisms and reagent charts for Organic chemistry',
+        ],
+        practiceVolume: '60–80 questions/day',
+      },
+      {
+        period: 'Days 7–9',
+        title: `${subjectItems[2]?.subjectName || 'Biology / Math'} Intensive Theory & Problem Solving`,
+        subject: subjectItems[2]?.subjectName || 'Biology',
+        focusChapters: s3Chaps.length > 0 ? s3Chaps : ['Physiology', 'Genetics', 'Calculus'],
+        activities: [
+          'NCERT diagram review and factual memorization drills',
+          'High-frequency PYQ (Previous Year Questions) practice',
+          'Timed section drills under 45 minutes',
+        ],
+        practiceVolume: '70–90 questions/day',
+      },
+      {
+        period: 'Days 10–11',
+        title: 'Mixed Practice & Error Notebook Remediation',
+        focusChapters: ['All Priority Weak Areas', 'Error Notebook Questions'],
+        activities: [
+          'Solve 100+ mixed-subject questions from previous mistakes',
+          'Re-attempt all incorrect questions from this BRAINROS test',
+          'Speed drilling with 60-second time limits per question',
+        ],
+        practiceVolume: '100 questions/day',
+      },
+      {
+        period: 'Day 12',
+        title: 'Full-Length BRAINROS Mock Test',
+        focusChapters: ['Full Exam Syllabus'],
+        activities: [
+          'Take full-length 3-hour timed exam under strict exam conditions',
+          'Execute Round 1, Round 2, Round 3 time management strategy',
+          'Strictly adhere to 50-50 elimination rule to minimize guessing',
+        ],
+        practiceVolume: 'Full Length Test',
+      },
+      {
+        period: 'Day 13',
+        title: 'Deep Error Audit & Root-Cause Analysis',
+        focusChapters: ['Mock Test Errors', 'Calculation Slips'],
+        activities: [
+          'Audit every wrong and unattempted question from Day 12 test',
+          'Classify errors into Conceptual, Calculation, and Silly mistakes',
+          'Update Error Notebook with corrected solutions and derivations',
+        ],
+        practiceVolume: 'Comprehensive Review',
+      },
+      {
+        period: 'Day 14',
+        title: 'Final Rapid Revision & Formula Sheets',
+        focusChapters: ['High-Weightage Formulas', 'NCERT Highlights'],
+        activities: [
+          'Rapid flashcard and formula handbook revision across all subjects',
+          'Review summary tables, named reactions, and physical constants',
+          'Mental preparation, relaxation, and exam pacing review',
+        ],
+        practiceVolume: 'Rapid Recall',
+      },
+    ];
+
+    const section11FourteenDayPlan: FourteenDayImprovementPlanSection = { blocks };
+
+    // SECTION 12: Personalized Action Checklist
+    const section12ActionChecklist: PersonalizedActionChecklistSection = {
+      items: [
+        {
+          id: 'act-1',
+          text: `Revise weak chapters (${priorityWeaknesses[0] || 'core concepts'}) every 3 days without fail.`,
+          category: 'Revision',
+          isKeyAction: true,
+        },
+        {
+          id: 'act-2',
+          text: 'Maintain an Error Notebook and log every incorrect question immediately.',
+          category: 'Error Reduction',
+          isKeyAction: true,
+        },
+        {
+          id: 'act-3',
+          text: `Practise at least 50 ${subjectItems[0]?.subjectName || 'Physics'} numerical problems daily.`,
+          category: 'Practice',
+          isKeyAction: true,
+        },
+        {
+          id: 'act-4',
+          text: 'Revise NCERT textbook line-by-line and review all highlighted summaries.',
+          category: 'Theory',
+          isKeyAction: false,
+        },
+        {
+          id: 'act-5',
+          text: 'Analyse root causes of every incorrect question before moving to the next chapter.',
+          category: 'Error Reduction',
+          isKeyAction: true,
+        },
+        {
+          id: 'act-6',
+          text: 'Avoid blind guessing and strictly apply the 50-50 elimination rule during tests.',
+          category: 'Strategy',
+          isKeyAction: true,
+        },
+        {
+          id: 'act-7',
+          text: 'Improve calculation speed by doing scratch-pad arithmetic neatly in designated columns.',
+          category: 'Speed',
+          isKeyAction: false,
+        },
+        {
+          id: 'act-8',
+          text: 'Take every BRAINROS mock exam under actual, uninterrupted examination conditions.',
+          category: 'Discipline',
+          isKeyAction: true,
+        },
+      ],
+    };
+
+    // SECTION 13: Parent Summary
+    const strongSubjectNames = subjectItems.filter((s) => s.accuracy >= 75).map((s) => s.subjectName).join(' and ') || subjectItems[0]?.subjectName || 'Core Subjects';
+    const weakSubjectNames = subjectItems.filter((s) => s.accuracy < 70).map((s) => s.subjectName).join(' and ') || 'analytical problem solving';
+
+    const percentileStr = overallPercentile !== null ? `with a ${overallPercentile} percentile` : '';
+    const parentParagraph = `Your ward ${student?.name || 'the student'} has achieved ${result.totalScore}/${result.maxScore} marks (${Math.round(result.percentage * 10) / 10}%) ${percentileStr}, demonstrating a ${section2OverallPerformance.performanceLevel.toLowerCase()} level of preparation. The student performed particularly well in ${strongSubjectNames}, while the major opportunity for score gain is in ${weakSubjectNames}, along with reducing avoidable calculation and silly mistakes. With focused chapter revision and regular analysis of BRAINROS mock tests, the student has the potential to move towards the ${shortTerm}–${strongTarget}+ score range. The objective is not simply taking more tests, but analysing every test and converting mistakes into marks.`;
+
+    const section13ParentSummary: ParentSummarySection = {
+      summaryParagraph: parentParagraph,
+      keyHighlights: [
+        `Scored ${result.totalScore}/${result.maxScore} (${Math.round(result.percentage * 10) / 10}%) with ${Math.round(result.accuracy * 10) / 10}% accuracy.`,
+        `Solid performance in ${strongSubjectNames}.`,
+        `Immediate score gain opportunity of ~${Math.max(10, potentialRecoverableMarks)} marks in ${weakSubjectNames}.`,
+      ],
+      potentialScoreRange: `${shortTerm}–${strongTarget}+`,
+    };
+
+    // SECTION 14: BRAINROS Performance Index
+    const academicStrengthStars = Math.min(5, Math.max(1, Math.round((result.percentage / 20) * 10) / 10));
+    const conceptualStars = Math.min(5, Math.max(1, Math.round((result.accuracy / 20) * 10) / 10));
+    const accuracyStars = Math.min(5, Math.max(1, Math.round((result.accuracy / 20) * 10) / 10));
+    const timeMgmtStars = Math.min(5, Math.max(1, Math.round((optimalPaceCount / Math.max(1, optimalPaceCount + rushedCount + overthoughtCount)) * 5 * 10) / 10));
+    const revisionLevelStars = Math.min(5, Math.max(1, Math.round(((masteredChapters.length + revisionNeededChapters.length * 0.5) / Math.max(1, chapterItems.length)) * 5 * 10) / 10));
+    const examReadinessStars = Math.min(5, Math.max(1, Math.round(((academicStrengthStars + accuracyStars + timeMgmtStars) / 3) * 10) / 10));
+
+    const performanceMetrics: PerformanceIndexMetric[] = [
+      { dimension: 'Academic Strength', ratingStars: academicStrengthStars, ratingLabel: `${academicStrengthStars.toFixed(1)}/5.0` },
+      { dimension: 'Conceptual Understanding', ratingStars: conceptualStars, ratingLabel: `${conceptualStars.toFixed(1)}/5.0` },
+      { dimension: 'Accuracy', ratingStars: accuracyStars, ratingLabel: `${accuracyStars.toFixed(1)}/5.0` },
+      { dimension: 'Time Management', ratingStars: timeMgmtStars, ratingLabel: `${timeMgmtStars.toFixed(1)}/5.0` },
+      { dimension: 'Revision Level', ratingStars: revisionLevelStars, ratingLabel: `${revisionLevelStars.toFixed(1)}/5.0` },
+      { dimension: 'Exam Readiness', ratingStars: examReadinessStars, ratingLabel: `${examReadinessStars.toFixed(1)}/5.0` },
+    ];
+
+    const overallRatingStr = (result.percentage >= 85 || result.accuracy >= 85)
+      ? 'EXCELLENT'
+      : (result.percentage >= 70 || result.accuracy >= 75)
+      ? 'VERY GOOD'
+      : result.percentage >= 55
+      ? 'GOOD'
+      : 'NEEDS ATTENTION';
+
+    const section14PerformanceIndex: BrainrosPerformanceIndexSection = {
+      metrics: performanceMetrics,
+      overallRating: overallRatingStr,
+    };
+
     return {
       attemptId,
       examId: exam.id,
@@ -642,6 +1221,38 @@ export class AnalysisEngineService {
       timeAnalysis,
       attemptStrategy,
       recommendations,
+
+      // 14 Canonical Sections (with direct and section-numbered aliases)
+      studentDetails: section1StudentDetails,
+      overallPerformance: section2OverallPerformance,
+      subjectWiseAnalysis: section3SubjectWiseAnalysis,
+      subjectPerformance: section4SubjectPerformance,
+      topicWisePerformance: section5TopicWisePerformance,
+      strengthWeaknessAnalysis: section6StrengthWeakness,
+      errorAnalysis: section7ErrorAnalysis,
+      timeManagement: section8TimeManagement,
+      performanceTrend: section9PerformanceTrend,
+      expectedPerformance: section10ExpectedPerformance,
+      improvementPlan: section11FourteenDayPlan,
+      actionChecklist: section12ActionChecklist,
+      parentSummary: section13ParentSummary,
+      performanceIndex: section14PerformanceIndex,
+
+      // Section numbered keys for backward compatibility
+      section1StudentDetails,
+      section2OverallPerformance,
+      section3SubjectWiseAnalysis,
+      section4SubjectPerformance,
+      section5TopicWisePerformance,
+      section6StrengthWeakness,
+      section7ErrorAnalysis,
+      section8TimeManagement,
+      section9PerformanceTrend,
+      section10ExpectedPerformance,
+      section11FourteenDayPlan,
+      section12ActionChecklist,
+      section13ParentSummary,
+      section14PerformanceIndex,
     };
   }
 
@@ -733,7 +1344,7 @@ export class AnalysisEngineService {
     const recs: ActionableRecommendation[] = [];
     let idCounter = 1;
 
-    // 1. Critical chapters (High impact, filtered by minimum sample size)
+    // 1. Critical chapters
     const validCritical = params.criticalFocusChapters.filter(
       (c) => c.totalQuestions >= 2,
     );
@@ -797,7 +1408,7 @@ export class AnalysisEngineService {
       });
     }
 
-    // 5. Revision needed chapters (Medium / Low impact)
+    // 5. Revision needed chapters
     for (const chap of params.revisionNeededChapters.slice(0, 2)) {
       recs.push({
         id: `rec-${idCounter++}`,
