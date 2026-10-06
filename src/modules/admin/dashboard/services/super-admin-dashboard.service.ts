@@ -987,8 +987,6 @@ export class SuperAdminDashboardService {
       totalStudents,
       studentsWithAttempts,
       payingStudentsCount,
-      totalLeads,
-      convertedLeads,
     ] = await Promise.all([
       this.prisma.student.count({ where: studentWhere }),
       this.prisma.student.count({
@@ -1003,8 +1001,6 @@ export class SuperAdminDashboardService {
           orders: { some: { status: 'COMPLETED' } },
         },
       }),
-      this.prisma.salesLead.count(),
-      this.prisma.salesLead.count({ where: { status: 'CONVERTED' } }),
     ]);
 
     const payingConversionRate =
@@ -1017,11 +1013,6 @@ export class SuperAdminDashboardService {
         ? Number(((studentsWithAttempts / totalStudents) * 100).toFixed(1))
         : 0;
 
-    const salesLeadConversionRate =
-      totalLeads > 0
-        ? Number(((convertedLeads / totalLeads) * 100).toFixed(1))
-        : 0;
-
     const result = {
       funnel: {
         totalRegistered: totalStudents,
@@ -1029,11 +1020,6 @@ export class SuperAdminDashboardService {
         attemptConversionRate,
         purchasedPackage: payingStudentsCount,
         payingConversionRate,
-      },
-      salesLeads: {
-        totalLeads,
-        convertedLeads,
-        leadConversionRate: salesLeadConversionRate,
       },
       formulaUsed:
         'Paying Conversion Rate = (Paying Students / Total Registered Students) * 100',
@@ -1075,20 +1061,10 @@ export class SuperAdminDashboardService {
           where: orderDateWhere,
           include: { payments: true },
         },
-        salesLeads: true,
       },
     });
 
     let performanceData = salesAgents.map((agent) => {
-      const assignedLeads = agent.salesLeads.length;
-      const convertedLeads = agent.salesLeads.filter(
-        (l) => l.status === 'CONVERTED',
-      ).length;
-      const conversionRate =
-        assignedLeads > 0
-          ? Number(((convertedLeads / assignedLeads) * 100).toFixed(1))
-          : 0;
-
       const totalOrders = agent.salesOrders.length;
       const completedOrders = agent.salesOrders.filter(
         (o) => o.status === 'COMPLETED',
@@ -1109,9 +1085,6 @@ export class SuperAdminDashboardService {
         name: agent.email?.split('@')[0] || 'Sales Agent',
         email: agent.email || '',
         phone: agent.phone || agent.mobileNumber || '',
-        assignedLeads,
-        convertedLeads,
-        conversionRate,
         totalOrders,
         successfulSales,
         revenueGenerated,

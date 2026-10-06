@@ -19,6 +19,7 @@ export const VALID_STAFF_ROLES = [
   'MANAGER',
   'OPERATOR',
   'ACCOUNTANT',
+  'SALES_AGENT',
 ] as const;
 
 export type ValidStaffRole = typeof VALID_STAFF_ROLES[number];

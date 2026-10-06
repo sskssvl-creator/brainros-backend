@@ -88,14 +88,17 @@ export class AdminStaffService {
     }
 
     // Resolve target staff role
-    const role = await this.prisma.role.findUnique({
+    let role = await this.prisma.role.findUnique({
       where: { name: dto.role },
     });
 
     if (!role) {
-      throw new BadRequestException(
-        `Staff role '${dto.role}' is not configured in the database.`,
-      );
+      role = await this.prisma.role.create({
+        data: {
+          name: dto.role,
+          description: `${dto.role} Role`,
+        },
+      });
     }
 
     const defaultPasswordHash = await bcrypt.hash('Staff@Brainros2026', 10);

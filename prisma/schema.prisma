@@ -222,7 +222,6 @@ model User {
   notifications      Notification[]          @relation("UserNotifications")
   orders             Order[]
   salesOrders        Order[]                 @relation("SalesAgentOrders")
-  salesLeads         SalesLead[]             @relation("SalesAgentLeads")
   createdQuestionImports QuestionImport[]    @relation("QuestionImportCreatedBy")
   createdTranslationImports TranslationImport[] @relation("TranslationImportCreatedBy")
   createdExamImports ExamImport[]              @relation("ExamImportCreatedBy")
@@ -349,7 +348,6 @@ model Student {
   parentLinks         ParentStudentLink[]
   batchMemberships    BatchStudent[]
   orders              Order[]
-  salesLeads          SalesLead[]
   analysisReports     ExamAnalysisReport[]
   paymentTransactions PaymentTransaction[]    @relation("StudentPaymentTransactions")
 
@@ -2748,31 +2746,6 @@ model PaymentTransaction {
   @@index([studentId])
   @@index([userId])
   @@map("payment_transactions")
-}
-
-model SalesLead {
-  id              String         @id @default(uuid()) @db.Uuid
-  salesAgentId    String         @map("sales_agent_id") @db.Uuid
-  studentId       String?        @map("student_id") @db.Uuid
-  leadName        String         @map("lead_name")
-  leadPhone       String         @map("lead_phone")
-  leadEmail       String?        @map("lead_email")
-  state           String?
-  district        String?
-  targetExam      String?        @map("target_exam")
-  status          String         @default("NEW") // NEW, CONTACTED, QUALIFIED, CONVERTED, LOST
-  convertedAt     DateTime?      @map("converted_at")
-  notes           String?
-  createdAt       DateTime       @default(now()) @map("created_at")
-  updatedAt       DateTime       @updatedAt @map("updated_at")
-
-  salesAgent      User           @relation("SalesAgentLeads", fields: [salesAgentId], references: [id], onDelete: Cascade)
-  student         Student?       @relation(fields: [studentId], references: [id], onDelete: SetNull)
-
-  @@index([salesAgentId])
-  @@index([status])
-  @@index([createdAt])
-  @@map("sales_leads")
 }
 
 // ═══════════════════════════════════════════════════════════════════
