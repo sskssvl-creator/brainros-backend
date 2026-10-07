@@ -52,6 +52,8 @@ export interface SalesVisitRecord {
   checkOutAddress?: string | null;
   checkOutPhotos?: string[];
   photos?: string[];
+  slipPhoto?: string | null;
+  slipUrl?: string | null;
   summary?: string | null;
   keyDiscussionPoints?: string | null;
   nextFollowUpDate?: string | null;
@@ -128,6 +130,8 @@ export class SalesVisitService {
       checkInPhotos: dto.photos || [],
       checkOutPhotos: dto.photos || [],
       photos: dto.photos || [],
+      slipPhoto: dto.slipPhoto || dto.slipUrl || null,
+      slipUrl: dto.slipUrl || dto.slipPhoto || null,
       createdAt: now,
       updatedAt: now,
     };

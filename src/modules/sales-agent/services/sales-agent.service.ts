@@ -636,6 +636,8 @@ export class SalesAgentService {
       notes: visit.notes || visit.summary || null,
       requirements: visit.keyDiscussionPoints || null,
       photos: allPhotos,
+      slipPhoto: visit.slipPhoto || visit.slipUrl || null,
+      slipUrl: visit.slipUrl || visit.slipPhoto || null,
       institute: {
         name: visit.institutionName,
         address: visit.locationAddress || visit.checkInAddress || null,
@@ -656,6 +658,8 @@ export class SalesAgentService {
         keyDiscussionPoints: visit.keyDiscussionPoints,
         checkInTime: visit.checkInTime,
         checkOutTime: visit.checkOutTime,
+        slipPhoto: visit.slipPhoto || visit.slipUrl || null,
+        slipUrl: visit.slipUrl || visit.slipPhoto || null,
       },
       location: {
         latitude: visit.checkInLat ?? null,
@@ -694,6 +698,8 @@ export class SalesAgentService {
         checkInTime: visit.checkInTime,
         checkOutTime: visit.checkOutTime,
         photos: allPhotos,
+        slipPhoto: visit.slipPhoto || visit.slipUrl || null,
+        slipUrl: visit.slipUrl || visit.slipPhoto || null,
         followUpDate: visit.nextFollowUpDate,
         followUpNotes: visit.summary,
         createdAt: visit.createdAt,

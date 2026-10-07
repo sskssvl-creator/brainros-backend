@@ -84,6 +84,14 @@ export class CreateSalesVisitDto {
   @IsArray()
   @IsString({ each: true })
   photos?: string[];
+
+  @IsOptional()
+  @IsString()
+  slipPhoto?: string;
+
+  @IsOptional()
+  @IsString()
+  slipUrl?: string;
 }
 
 export class CheckInVisitDto {
@@ -151,6 +159,14 @@ export class CheckOutVisitDto {
   @IsNumber()
   @Min(0)
   estimatedStudentCount?: number;
+
+  @IsOptional()
+  @IsString()
+  slipPhoto?: string;
+
+  @IsOptional()
+  @IsString()
+  slipUrl?: string;
 }
 
 export class UpdateSalesVisitDto {
@@ -197,6 +213,14 @@ export class UpdateSalesVisitDto {
   @IsOptional()
   @IsDateString()
   nextFollowUpDate?: string;
+
+  @IsOptional()
+  @IsString()
+  slipPhoto?: string;
+
+  @IsOptional()
+  @IsString()
+  slipUrl?: string;
 }
 
 export class SalesVisitFilterDto {
