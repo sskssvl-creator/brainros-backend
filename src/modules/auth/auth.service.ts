@@ -1122,31 +1122,7 @@ export class AuthService {
       });
     }
 
-    // B. Check if identifier is a Student ID (e.g. BRN-2026-000001, STU001001)
-    if (
-      !user &&
-      (rawIdentifier.toUpperCase().startsWith('BRN-') ||
-        rawIdentifier.toUpperCase().startsWith('STU'))
-    ) {
-      const student = await this.prisma.student.findFirst({
-        where: {
-          OR: [
-            { studentCode: { equals: rawIdentifier, mode: 'insensitive' } },
-            { studentId: { equals: rawIdentifier, mode: 'insensitive' } },
-          ],
-        },
-        include: {
-          user: {
-            include: { userRoles: { include: { role: true } }, student: true },
-          },
-        },
-      });
-      if (student?.user) {
-        user = student.user;
-      }
-    }
-
-    // C. Check if identifier is a Mobile Number
+    // B. Check if identifier is a Mobile Number
     if (!user) {
       const normalizedMobile =
         this.otpService.normalizeMobileNumber(rawIdentifier);
@@ -1164,26 +1140,6 @@ export class AuthService {
         },
         include: { userRoles: { include: { role: true } }, student: true },
       });
-    }
-
-    // D. Fallback search across all 3 identifiers
-    if (!user) {
-      const student = await this.prisma.student.findFirst({
-        where: {
-          OR: [
-            { studentCode: { equals: rawIdentifier, mode: 'insensitive' } },
-            { studentId: { equals: rawIdentifier, mode: 'insensitive' } },
-          ],
-        },
-        include: {
-          user: {
-            include: { userRoles: { include: { role: true } }, student: true },
-          },
-        },
-      });
-      if (student?.user) {
-        user = student.user;
-      }
     }
 
     if (!user) {
@@ -1962,7 +1918,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid Student ID or password.');
     }
 
-    const user = student.user;
+    const user = { ...student.user, student };
     this.verifyAccountActive(user);
 
     const isPasswordValid = await this.passwordService.comparePassword(

@@ -313,6 +313,12 @@ export class SalesVisitService {
       all = all.filter((v) => v.outcome === filter.outcome);
     }
 
+    if (filter.slipStatus === 'PENDING') {
+      all = all.filter((v) => !v.slipPhoto && !v.slipUrl);
+    } else if (filter.slipStatus === 'UPLOADED') {
+      all = all.filter((v) => Boolean(v.slipPhoto || v.slipUrl));
+    }
+
     if (filter.state) {
       all = all.filter((v) => v.state?.toLowerCase().includes(filter.state!.toLowerCase()));
     }
@@ -465,5 +471,50 @@ export class SalesVisitService {
       key: uploadResult.key,
       provider: uploadResult.provider,
     };
+  }
+
+  /**
+   * Attach or update slip proof for a field visit
+   */
+  async attachSlip(visitId: string, slipUrl: string, actorUserId: string) {
+    if (!slipUrl || !slipUrl.trim()) {
+      throw new BadRequestException('Slip URL / file path is required.');
+    }
+
+    let visit = this.visitsStore.get(visitId);
+    if (!visit) {
+      const cleanId = visitId.replace(/^visit-/, '');
+      visit = this.visitsStore.get(cleanId);
+    }
+    if (!visit) {
+      visit = Array.from(this.visitsStore.values()).find(
+        (v) => v.id === visitId || v.id === visitId.replace(/^visit-/, '') || visitId.includes(v.id)
+      );
+    }
+    if (!visit) {
+      throw new NotFoundException(`Sales visit with ID ${visitId} not found.`);
+    }
+
+    const now = new Date().toISOString();
+    visit.slipPhoto = slipUrl.trim();
+    visit.slipUrl = slipUrl.trim();
+    visit.updatedAt = now;
+
+    this.visitsStore.set(visit.id, visit);
+
+    await this.auditLogService.logAction({
+      actorUserId,
+      action: 'SALES_VISIT_SLIP_ATTACHED',
+      entityType: 'SalesVisit',
+      entityId: visit.id,
+      afterState: {
+        slipPhoto: visit.slipPhoto,
+        slipUrl: visit.slipUrl,
+        updatedAt: visit.updatedAt,
+      },
+      metadata: { slipUrl },
+    });
+
+    return visit;
   }
 }

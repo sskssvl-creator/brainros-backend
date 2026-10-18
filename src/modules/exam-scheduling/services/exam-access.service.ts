@@ -172,6 +172,10 @@ export class ExamAccessService {
             );
           }
 
+          if (student.jee) eligibleTypes.add('jee');
+          if (student.cet) eligibleTypes.add('cet');
+          if (student.neet) eligibleTypes.add('neet');
+
           const directTargetIds = new Set<string>([
             ...(student.examTargetId ? [student.examTargetId] : []),
             ...(student.studentExamTargets?.map((st: any) => st.examTargetId) || []),

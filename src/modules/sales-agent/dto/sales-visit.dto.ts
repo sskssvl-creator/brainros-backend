@@ -1,5 +1,6 @@
 import {
   IsString,
+  IsNotEmpty,
   IsOptional,
   IsNumber,
   IsEnum,
@@ -271,9 +272,23 @@ export class SalesVisitFilterDto {
 
   @IsOptional()
   @IsString()
+  slipStatus?: 'PENDING' | 'UPLOADED' | 'ALL';
+
+  @IsOptional()
+  @IsString()
   sortBy?: string = 'scheduledAt';
 
   @IsOptional()
   @IsString()
   sortOrder?: 'asc' | 'desc' = 'desc';
+}
+
+export class AttachSlipDto {
+  @IsNotEmpty()
+  @IsString()
+  slipUrl: string;
+
+  @IsOptional()
+  @IsString()
+  slipPhoto?: string;
 }

@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import { BadRequestException, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { AuthService } from '../auth.service';
 import { TwoFactorService } from './two-factor.service';
 import { TwoFactorConfig } from '../config/two-factor.config';
@@ -376,19 +376,12 @@ describe('2FA Integration & End-to-End Authentication Flows', () => {
         expect(verifyRes.data.accessToken).toBe('mock-access-token');
       });
 
-      it('Student ID identifier login should resolve user mobile and verify with 12345', async () => {
-        const reqRes = await authService.requestPasswordlessLoginOtp({
-          identifier: 'BRN-2026-0001',
-        });
-
-        expect(reqRes.data.requiresOtp).toBe(true);
-
-        const verifyRes = await authService.verifyPasswordlessLoginOtp({
-          loginRequestId: reqRes.data.loginRequestId,
-          otp: '12345',
-        });
-
-        expect(verifyRes.data.accessToken).toBe('mock-access-token');
+      it('Student ID identifier should NOT trigger OTP request in requestPasswordlessLoginOtp', async () => {
+        await expect(
+          authService.requestPasswordlessLoginOtp({
+            identifier: 'BRN-2026-0001',
+          }),
+        ).rejects.toThrow(NotFoundException);
       });
     });
 

@@ -46,6 +46,9 @@ export class StudentService {
     }
 
     const eligibleExamTypeNames = new Set<string>();
+    if (student.jee) eligibleExamTypeNames.add('JEE');
+    if (student.cet) eligibleExamTypeNames.add('CET');
+    if (student.neet) eligibleExamTypeNames.add('NEET');
     for (const name of rawTargetNames) {
       const resolved = resolveEligibleExamTypes(name);
       resolved.forEach((t) => eligibleExamTypeNames.add(t));

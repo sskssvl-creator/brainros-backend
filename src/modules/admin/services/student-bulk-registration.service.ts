@@ -10,6 +10,7 @@ import { OtpService } from '../../auth/services/otp.service';
 import { UpdateBulkStudentRowDto } from '../dto/student-bulk-upload.dto';
 import * as ExcelJS from 'exceljs';
 import * as path from 'path';
+import * as bcrypt from 'bcrypt';
 
 import { Optional } from '@nestjs/common';
 import { JobProgressService } from '../../job-progress/services/job-progress.service';
@@ -17,6 +18,9 @@ import {
   CANONICAL_TARGET_EXAMS,
   resolveEligibleExamTypes,
   normalizeTargetExamInput,
+  mapExamBooleansToCanonical,
+  mapCanonicalToExamBooleans,
+  parseBooleanFlag,
 } from '../../../common/constants/target-exam.constant';
 
 const ALLOWED_EXTENSIONS = ['.csv', '.xlsx', '.xls'];
@@ -75,10 +79,13 @@ export class StudentBulkRegistrationService {
       { header: 'Full Name *', key: 'name', width: 25 },
       { header: 'Mobile Number * (10 Digits)', key: 'mobile', width: 22 },
       { header: 'Email Address (Optional)', key: 'email', width: 28 },
+      { header: 'Password * (Min 6 Characters)', key: 'password', width: 26 },
       { header: 'State *', key: 'state', width: 20 },
       { header: 'City / District *', key: 'city', width: 22 },
       { header: 'Class / Grade * (e.g. 11th, 12th, Dropper)', key: 'class', width: 25 },
-      { header: 'Exam Target * (Options: JEE, CET, NEET, NEET + JEE, NEET + State CET, JEE + State CET, JEE + NEET + State CET)', key: 'examTarget', width: 40 },
+      { header: 'JEE * (TRUE / FALSE)', key: 'jee', width: 20 },
+      { header: 'CET * (TRUE / FALSE)', key: 'cet', width: 20 },
+      { header: 'NEET * (TRUE / FALSE)', key: 'neet', width: 20 },
       { header: 'Preferred Language * (e.g. ENGLISH, HINDI, GUJARATI)', key: 'preferredLanguage', width: 26 },
     ];
 
@@ -102,57 +109,98 @@ export class StudentBulkRegistrationService {
       cell.alignment = { vertical: 'middle', horizontal: 'center' };
     });
 
-    // Sample data rows (with exact canonical target examples)
+    // Sample data rows showcasing combinations with separate Boolean flags
     const sampleRows = [
       {
         name: 'Rahul Sharma',
         mobile: '9876543210',
         email: 'rahul.sharma@example.com',
+        password: 'StudentPassword1!',
         state: 'Gujarat',
         city: 'Ahmedabad',
         class: '12th',
-        examTarget: 'NEET + State CET',
+        jee: 'FALSE',
+        cet: 'TRUE',
+        neet: 'TRUE',
         preferredLanguage: 'ENGLISH',
       },
       {
         name: 'Priya Patel',
         mobile: '9876543211',
         email: 'priya.patel@example.com',
+        password: 'StudentPassword2!',
         state: 'Gujarat',
         city: 'Surat',
         class: '11th',
-        examTarget: 'JEE + State CET',
+        jee: 'TRUE',
+        cet: 'TRUE',
+        neet: 'FALSE',
         preferredLanguage: 'GUJARATI',
       },
       {
         name: 'Amit Verma',
         mobile: '9876543212',
         email: 'amit.verma@example.com',
+        password: 'StudentPassword3!',
         state: 'Maharashtra',
         city: 'Mumbai',
         class: '12th',
-        examTarget: 'NEET + JEE',
+        jee: 'TRUE',
+        cet: 'FALSE',
+        neet: 'TRUE',
         preferredLanguage: 'HINDI',
       },
       {
         name: 'Raj Shah',
         mobile: '9876543213',
         email: 'raj.shah@example.com',
+        password: 'StudentPassword4!',
         state: 'Gujarat',
         city: 'Vadodara',
         class: '12th',
-        examTarget: 'JEE',
+        jee: 'TRUE',
+        cet: 'FALSE',
+        neet: 'FALSE',
         preferredLanguage: 'ENGLISH',
       },
       {
         name: 'Sneha Kulkarni',
         mobile: '9876543214',
         email: 'sneha.k@example.com',
+        password: 'StudentPassword5!',
         state: 'Maharashtra',
         city: 'Pune',
         class: 'Dropper',
-        examTarget: 'NEET',
+        jee: 'FALSE',
+        cet: 'FALSE',
+        neet: 'TRUE',
         preferredLanguage: 'MARATHI',
+      },
+      {
+        name: 'Tanmay Joshi',
+        mobile: '9876543215',
+        email: 'tanmay.j@example.com',
+        password: 'StudentPassword6!',
+        state: 'Maharashtra',
+        city: 'Nagpur',
+        class: '12th',
+        jee: 'TRUE',
+        cet: 'TRUE',
+        neet: 'TRUE',
+        preferredLanguage: 'ENGLISH',
+      },
+      {
+        name: 'Ananya Deshmukh',
+        mobile: '9876543216',
+        email: 'ananya.d@example.com',
+        password: 'StudentPassword7!',
+        state: 'Karnataka',
+        city: 'Bengaluru',
+        class: '11th',
+        jee: 'FALSE',
+        cet: 'TRUE',
+        neet: 'FALSE',
+        preferredLanguage: 'ENGLISH',
       },
     ];
 
@@ -212,6 +260,10 @@ export class StudentBulkRegistrationService {
         if (val.includes('name') && !val.includes('state') && !val.includes('school')) headerMap.set(colNumber, 'name');
         else if (val.includes('mobile') || val.includes('phone')) headerMap.set(colNumber, 'mobile');
         else if (val.includes('email')) headerMap.set(colNumber, 'email');
+        else if (val.includes('pass')) headerMap.set(colNumber, 'password');
+        else if (val.includes('jee')) headerMap.set(colNumber, 'jee');
+        else if (val.includes('cet')) headerMap.set(colNumber, 'cet');
+        else if (val.includes('neet')) headerMap.set(colNumber, 'neet');
         else if (val.includes('target') || val.includes('exam')) headerMap.set(colNumber, 'examTarget');
         else if (val.includes('state')) headerMap.set(colNumber, 'state');
         else if (val.includes('city') || val.includes('district')) headerMap.set(colNumber, 'city');
@@ -279,6 +331,10 @@ export class StudentBulkRegistrationService {
         if (val.includes('name') && !val.includes('state') && !val.includes('school')) headerMap.set(idx, 'name');
         else if (val.includes('mobile') || val.includes('phone')) headerMap.set(idx, 'mobile');
         else if (val.includes('email')) headerMap.set(idx, 'email');
+        else if (val.includes('pass')) headerMap.set(idx, 'password');
+        else if (val.includes('jee')) headerMap.set(idx, 'jee');
+        else if (val.includes('cet')) headerMap.set(idx, 'cet');
+        else if (val.includes('neet')) headerMap.set(idx, 'neet');
         else if (val.includes('target') || val.includes('exam')) headerMap.set(idx, 'examTarget');
         else if (val.includes('state')) headerMap.set(idx, 'state');
         else if (val.includes('city') || val.includes('district')) headerMap.set(idx, 'city');
@@ -576,12 +632,64 @@ export class StudentBulkRegistrationService {
         }
       }
 
-      // Exam Target (Strictly accepts only the 7 Target combinations)
+      // Password Validation
+      const rawPassword = (raw.password || '').trim();
+      if (!rawPassword) {
+        rowErrors.push({
+          field: 'password',
+          errorCode: 'MISSING_PASSWORD',
+          message: 'Password is required (minimum 6 characters).',
+        });
+      } else if (rawPassword.length < 6) {
+        rowErrors.push({
+          field: 'password',
+          errorCode: 'PASSWORD_TOO_SHORT',
+          message: 'Password must be at least 6 characters long.',
+        });
+      }
+
+      let passwordHash: string | null = null;
+      if (rawPassword && rawPassword.length >= 6) {
+        passwordHash = bcrypt.hashSync(rawPassword, 10);
+      }
+
+      // Exam Target Validation (supports separate Boolean columns: jee, cet, neet or legacy combo string)
       let resolvedExamTargetId: string | null = null;
       const resolvedExamTargetIds: string[] = [];
       const validTargetNames: string[] = [];
+      let hasJee = false;
+      let hasCet = false;
+      let hasNeet = false;
 
-      if (!examTargetName) {
+      if (raw.jee !== undefined || raw.cet !== undefined || raw.neet !== undefined) {
+        hasJee = parseBooleanFlag(raw.jee);
+        hasCet = parseBooleanFlag(raw.cet);
+        hasNeet = parseBooleanFlag(raw.neet);
+
+        if (!hasJee && !hasCet && !hasNeet) {
+          rowErrors.push({
+            field: 'examTarget',
+            errorCode: 'MISSING_EXAM_ELIGIBILITY',
+            message: 'At least one target exam (JEE, CET, or NEET) must be TRUE.',
+          });
+        } else {
+          const canonicalTargetName = mapExamBooleansToCanonical(hasJee, hasCet, hasNeet);
+          if (canonicalTargetName) {
+            const resolved = this.resolveCanonicalExamTarget(canonicalTargetName, examTargets);
+            if (resolved) {
+              resolvedExamTargetId = resolved.targetRecord.id;
+              resolvedExamTargetIds.push(...resolved.resolvedTargetIds);
+              validTargetNames.push(resolved.canonicalName);
+            } else {
+              rowErrors.push({
+                field: 'examTarget',
+                errorCode: 'INVALID_EXAM_TARGET',
+                message: `Target combination (JEE=${hasJee}, CET=${hasCet}, NEET=${hasNeet}) could not be resolved.`,
+              });
+            }
+          }
+        }
+      } else if (!examTargetName) {
         rowErrors.push({
           field: 'examTarget',
           errorCode: 'MISSING_EXAM_TARGET',
@@ -600,6 +708,10 @@ export class StudentBulkRegistrationService {
           resolvedExamTargetId = resolved.targetRecord.id;
           resolvedExamTargetIds.push(...resolved.resolvedTargetIds);
           validTargetNames.push(resolved.canonicalName);
+          const booleans = mapCanonicalToExamBooleans(resolved.canonicalName);
+          hasJee = booleans.jee;
+          hasCet = booleans.cet;
+          hasNeet = booleans.neet;
         }
       }
 
@@ -698,6 +810,10 @@ export class StudentBulkRegistrationService {
         mobile: normalizedMobile,
         rawMobile: standardMobile,
         email,
+        passwordHash,
+        jee: hasJee,
+        cet: hasCet,
+        neet: hasNeet,
         state: stateName,
         city: cityName,
         stateId: resolvedStateId,
@@ -714,10 +830,13 @@ export class StudentBulkRegistrationService {
         institutionName: selectedSchool.name,
       };
 
+      const sanitizedRaw = { ...raw };
+      delete sanitizedRaw.password;
+
       stagedRowsData.push({
         uploadId: bulkUpload.id,
         rowNumber,
-        rawData: raw,
+        rawData: sanitizedRaw,
         normalizedData,
         validationStatus: isValid ? 'VALID' : 'INVALID',
         deduplicationStatus: dedupStatus,
@@ -875,21 +994,26 @@ export class StudentBulkRegistrationService {
         total: totalFilteredRows,
         totalPages: Math.ceil(totalFilteredRows / limit),
       },
-      rows: rows.map((r) => ({
-        id: r.id,
-        rowNumber: r.rowNumber,
-        data: r.normalizedData || r.rawData,
-        validationStatus: r.validationStatus,
-        deduplicationStatus: r.deduplicationStatus,
-        activationStatus: r.activationStatus,
-        activationError: r.activationError,
-        matchedStudentId: r.matchedStudentId,
-        errors: r.errors.map((e) => ({
-          field: e.field,
-          errorCode: e.errorCode,
-          message: e.message,
-        })),
-      })),
+      rows: rows.map((r) => {
+        const rowData = { ...((r.normalizedData as any) || (r.rawData as any) || {}) };
+        delete rowData.password;
+        delete rowData.passwordHash;
+        return {
+          id: r.id,
+          rowNumber: r.rowNumber,
+          data: rowData,
+          validationStatus: r.validationStatus,
+          deduplicationStatus: r.deduplicationStatus,
+          activationStatus: r.activationStatus,
+          activationError: r.activationError,
+          matchedStudentId: r.matchedStudentId,
+          errors: r.errors.map((e) => ({
+            field: e.field,
+            errorCode: e.errorCode,
+            message: e.message,
+          })),
+        };
+      }),
     };
   }
 
@@ -1079,12 +1203,13 @@ export class StudentBulkRegistrationService {
               );
             }
 
-            // 2. Create User (passwordless, status ACTIVE, verified)
+            // 2. Create User (with hashed password, status ACTIVE, verified)
             const newUser = await tx.user.create({
               data: {
                 phone: data.mobile,
                 mobileNumber: data.mobile,
                 email: data.email || null,
+                passwordHash: data.passwordHash || null,
                 status: 'ACTIVE',
                 isVerified: true,
                 isActive: true,
@@ -1138,6 +1263,9 @@ export class StudentBulkRegistrationService {
                 institutionId: data.institutionId || null,
                 classId: data.classId,
                 examTargetId: data.examTargetId,
+                jee: Boolean(data.jee),
+                cet: Boolean(data.cet),
+                neet: Boolean(data.neet),
                 preferredLanguageId: data.preferredLanguageId,
                 status: 'ACTIVE',
                 registrationSource: 'OPERATOR',
@@ -1545,14 +1673,61 @@ export class StudentBulkRegistrationService {
       }
     }
 
-    // Exam Target validation (Strict 7 canonical options)
-    if (!examTargetName) {
+    // Password validation & hashing on edit
+    let passwordHash = currentNormalized.passwordHash || null;
+    if (patchData.password) {
+      const trimmedPass = patchData.password.trim();
+      if (trimmedPass.length < 6) {
+        rowErrors.push({
+          field: 'password',
+          errorCode: 'PASSWORD_TOO_SHORT',
+          message: 'Password must be at least 6 characters long.',
+        });
+      } else {
+        passwordHash = bcrypt.hashSync(trimmedPass, 10);
+      }
+    } else if (!passwordHash) {
       rowErrors.push({
-        field: 'examTarget',
-        errorCode: 'MISSING_EXAM_TARGET',
-        message: 'Exam Target is required (Valid: JEE, CET, NEET, NEET + JEE, NEET + State CET, JEE + State CET, JEE + NEET + State CET).',
+        field: 'password',
+        errorCode: 'MISSING_PASSWORD',
+        message: 'Password is required (minimum 6 characters).',
       });
-    } else {
+    }
+
+    // Exam Target validation (supports separate Boolean flags or legacy target name)
+    let hasJee = currentNormalized.jee ?? false;
+    let hasCet = currentNormalized.cet ?? false;
+    let hasNeet = currentNormalized.neet ?? false;
+
+    if (patchData.jee !== undefined || patchData.cet !== undefined || patchData.neet !== undefined) {
+      if (patchData.jee !== undefined) hasJee = Boolean(patchData.jee);
+      if (patchData.cet !== undefined) hasCet = Boolean(patchData.cet);
+      if (patchData.neet !== undefined) hasNeet = Boolean(patchData.neet);
+
+      if (!hasJee && !hasCet && !hasNeet) {
+        rowErrors.push({
+          field: 'examTarget',
+          errorCode: 'MISSING_EXAM_ELIGIBILITY',
+          message: 'At least one target exam (JEE, CET, or NEET) must be TRUE.',
+        });
+      } else {
+        const canonicalTargetName = mapExamBooleansToCanonical(hasJee, hasCet, hasNeet);
+        if (canonicalTargetName) {
+          const resolved = this.resolveCanonicalExamTarget(canonicalTargetName, examTargets);
+          if (resolved) {
+            resolvedExamTargetId = resolved.targetRecord.id;
+            resolvedExamTargetIds.push(...resolved.resolvedTargetIds);
+            validTargetNames.push(resolved.canonicalName);
+          } else {
+            rowErrors.push({
+              field: 'examTarget',
+              errorCode: 'INVALID_EXAM_TARGET',
+              message: `Target combination (JEE=${hasJee}, CET=${hasCet}, NEET=${hasNeet}) could not be resolved.`,
+            });
+          }
+        }
+      }
+    } else if (examTargetName) {
       const resolved = this.resolveCanonicalExamTarget(examTargetName, examTargets);
       if (!resolved) {
         rowErrors.push({
@@ -1564,7 +1739,25 @@ export class StudentBulkRegistrationService {
         resolvedExamTargetId = resolved.targetRecord.id;
         resolvedExamTargetIds.push(...resolved.resolvedTargetIds);
         validTargetNames.push(resolved.canonicalName);
+        const booleans = mapCanonicalToExamBooleans(resolved.canonicalName);
+        hasJee = booleans.jee;
+        hasCet = booleans.cet;
+        hasNeet = booleans.neet;
       }
+    } else if (currentNormalized.examTargetId) {
+      resolvedExamTargetId = currentNormalized.examTargetId;
+      if (Array.isArray(currentNormalized.examTargetIds)) {
+        resolvedExamTargetIds.push(...currentNormalized.examTargetIds);
+      }
+      if (currentNormalized.examTarget) {
+        validTargetNames.push(currentNormalized.examTarget);
+      }
+    } else {
+      rowErrors.push({
+        field: 'examTarget',
+        errorCode: 'MISSING_EXAM_TARGET',
+        message: 'Exam Target is required (Valid: JEE, CET, NEET, NEET + JEE, NEET + State CET, JEE + State CET, JEE + NEET + State CET).',
+      });
     }
 
     // Institution resolution fixed to upload context
@@ -1609,6 +1802,10 @@ export class StudentBulkRegistrationService {
       mobile: normalizedMobile,
       rawMobile: standardMobile,
       email,
+      passwordHash,
+      jee: hasJee,
+      cet: hasCet,
+      neet: hasNeet,
       state: stateName,
       city: cityName,
       stateId: resolvedStateId,

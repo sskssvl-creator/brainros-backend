@@ -77,6 +77,19 @@ export class UpdateBulkStudentRowDto {
   schoolCollege?: string;
 
   @IsOptional()
+  @IsString()
+  password?: string;
+
+  @IsOptional()
+  jee?: boolean;
+
+  @IsOptional()
+  cet?: boolean;
+
+  @IsOptional()
+  neet?: boolean;
+
+  @IsOptional()
   @IsUUID()
   institutionId?: string;
 
@@ -89,6 +102,10 @@ export interface BulkStudentRowNormalized {
   name: string;
   mobile: string;
   email?: string | null;
+  passwordHash?: string | null;
+  jee?: boolean;
+  cet?: boolean;
+  neet?: boolean;
   state?: string | null;
   city?: string | null;
   class?: string | null;

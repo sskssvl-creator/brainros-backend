@@ -2,12 +2,14 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
   Param,
   Body,
   Query,
   UseGuards,
   UseInterceptors,
   UploadedFile,
+  BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
@@ -20,6 +22,7 @@ import {
   CheckInVisitDto,
   CheckOutVisitDto,
   SalesVisitFilterDto,
+  AttachSlipDto,
 } from '../dto/sales-visit.dto';
 
 @Controller('sales-agent/visits')
@@ -135,6 +138,70 @@ export class SalesVisitController {
     return {
       statusCode: 201,
       message: 'Visit photo uploaded successfully.',
+      data,
+    };
+  }
+
+  /**
+   * POST /sales-agent/visits/:id/slip
+   * Attach slip proof URL to a visit
+   */
+  @Post(':id/slip')
+  async attachSlip(
+    @Param('id') id: string,
+    @CurrentUser('userId') userId: string,
+    @Body() dto: AttachSlipDto,
+  ) {
+    const url = dto.slipUrl || dto.slipPhoto;
+    if (!url) {
+      throw new BadRequestException('slipUrl is required.');
+    }
+    const data = await this.visitService.attachSlip(id, url, userId);
+    return {
+      statusCode: 200,
+      message: 'Activity slip attached successfully.',
+      data,
+    };
+  }
+
+  /**
+   * PATCH /sales-agent/visits/:id/slip
+   * Fallback PATCH endpoint for attaching slip
+   */
+  @Patch(':id/slip')
+  async attachSlipPatch(
+    @Param('id') id: string,
+    @CurrentUser('userId') userId: string,
+    @Body() dto: AttachSlipDto,
+  ) {
+    const url = dto.slipUrl || dto.slipPhoto;
+    if (!url) {
+      throw new BadRequestException('slipUrl is required.');
+    }
+    const data = await this.visitService.attachSlip(id, url, userId);
+    return {
+      statusCode: 200,
+      message: 'Activity slip attached successfully.',
+      data,
+    };
+  }
+
+  /**
+   * POST /sales-agent/visits/:id/upload-slip
+   * Upload file and attach slip to visit in one atomic step
+   */
+  @Post(':id/upload-slip')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadAndAttachSlip(
+    @Param('id') id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser('userId') userId: string,
+  ) {
+    const photoResult = await this.visitService.uploadVisitPhoto(file, userId);
+    const data = await this.visitService.attachSlip(id, photoResult.url, userId);
+    return {
+      statusCode: 200,
+      message: 'Activity slip uploaded and attached successfully.',
       data,
     };
   }

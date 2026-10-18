@@ -16,6 +16,8 @@ import { AdminStudentsService } from '../services/admin-students.service';
 import {
   AdminStudentsQueryDto,
   AddStudentParentDto,
+  UpdateAdminStudentDto,
+  ResetStudentPasswordDto,
 } from '../dto/admin-students.dto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../../auth/guards/roles.guard';
@@ -45,6 +47,16 @@ export class AdminStudentsController {
   @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER', 'OPERATOR', 'INSTITUTION_ADMIN')
   async getFilterOptions() {
     return this.studentsService.getFilterOptions();
+  }
+
+  /**
+   * GET /admin/students/:studentId
+   * Fetch single student complete profile for viewing/editing
+   */
+  @Get(':studentId')
+  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER', 'OPERATOR', 'INSTITUTION_ADMIN')
+  async getStudentById(@Param('studentId') studentId: string) {
+    return this.studentsService.getStudentById(studentId);
   }
 
   /**
@@ -91,17 +103,37 @@ export class AdminStudentsController {
 
   /**
    * PATCH /admin/students/:studentId
-   * Update student details (name, email, mobile, school, class, target, status)
+   * Update student details (name, studentCode, email, mobile, school, institution, class, target, status, password, etc.)
    */
   @Patch(':studentId')
   @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER', 'OPERATOR')
   @HttpCode(HttpStatus.OK)
   async updateStudent(
     @Param('studentId') studentId: string,
-    @Body() dto: any,
+    @Body() dto: UpdateAdminStudentDto,
     @Req() req: any,
   ) {
     const actorUserId = req.user?.id || req.user?.userId;
     return this.studentsService.updateStudent(studentId, dto, actorUserId);
+  }
+
+  /**
+   * POST /admin/students/:studentId/reset-password
+   * Reset student password with bcrypt hash and session revocation
+   */
+  @Post(':studentId/reset-password')
+  @Roles('SUPER_ADMIN', 'ADMIN', 'GENERAL_MANAGER', 'MANAGER')
+  @HttpCode(HttpStatus.OK)
+  async resetStudentPassword(
+    @Param('studentId') studentId: string,
+    @Body() dto: ResetStudentPasswordDto,
+    @Req() req: any,
+  ) {
+    const actorUserId = req.user?.id || req.user?.userId;
+    return this.studentsService.resetStudentPassword(
+      studentId,
+      dto.password,
+      actorUserId,
+    );
   }
 }

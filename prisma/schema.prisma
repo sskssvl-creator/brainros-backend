@@ -331,6 +331,9 @@ model Student {
   examTargetId        String            @map("exam_target_id") @db.Uuid
   preferredLanguageId String            @map("preferred_language_id") @db.Uuid
   admissionYear       Int?              @map("admission_year")
+  jee                 Boolean           @default(false)
+  cet                 Boolean           @default(false)
+  neet                Boolean           @default(false)
   status              StudentStatus     @default(ACTIVE)
   registrationSource  RegistrationSource @default(PUBLIC) @map("registration_source")
   createdAt           DateTime          @default(now()) @map("created_at")

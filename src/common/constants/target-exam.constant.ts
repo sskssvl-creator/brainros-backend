@@ -186,6 +186,11 @@ export function normalizeTargetExamInput(rawInput?: string | null): CanonicalTar
       }
     }
 
+    // Explicit invalid check: "JEE + CET" without "State CET" is rejected in strict legacy normalization
+    if (lower === 'jee + cet' || lower === 'cet + jee') {
+      return null;
+    }
+
     if (hasJee && hasNeet && hasStateCet) {
       return 'JEE + NEET + State CET';
     }
@@ -202,3 +207,52 @@ export function normalizeTargetExamInput(rawInput?: string | null): CanonicalTar
 
   return null;
 }
+
+/**
+ * Maps 3 independent Boolean flags (jee, cet, neet) strictly to one of the 7 canonical target exam strings.
+ * Returns null if all 3 flags are false or undefined.
+ */
+export function mapExamBooleansToCanonical(
+  jee: boolean,
+  cet: boolean,
+  neet: boolean,
+): CanonicalTargetExam | null {
+  const isJee = Boolean(jee);
+  const isCet = Boolean(cet);
+  const isNeet = Boolean(neet);
+
+  if (isJee && !isCet && !isNeet) return 'JEE';
+  if (!isJee && isCet && !isNeet) return 'CET';
+  if (!isJee && !isCet && isNeet) return 'NEET';
+  if (isJee && !isCet && isNeet) return 'NEET + JEE';
+  if (!isJee && isCet && isNeet) return 'NEET + State CET';
+  if (isJee && isCet && !isNeet) return 'JEE + State CET';
+  if (isJee && isCet && isNeet) return 'JEE + NEET + State CET';
+  return null;
+}
+
+/**
+ * Maps a canonical target exam or combo string to the 3 separate Boolean flags.
+ */
+export function mapCanonicalToExamBooleans(
+  targetName?: string | null,
+): { jee: boolean; cet: boolean; neet: boolean } {
+  const eligible = resolveEligibleExamTypes(targetName);
+  return {
+    jee: eligible.includes('JEE'),
+    cet: eligible.includes('CET'),
+    neet: eligible.includes('NEET'),
+  };
+}
+
+/**
+ * Safely parses string, number, or boolean spreadsheet cell values to a boolean flag.
+ */
+export function parseBooleanFlag(val: any): boolean {
+  if (typeof val === 'boolean') return val;
+  if (typeof val === 'number') return val === 1;
+  if (!val) return false;
+  const str = String(val).trim().toLowerCase();
+  return str === 'true' || str === 'yes' || str === '1' || str === 'y' || str === 't';
+}
+

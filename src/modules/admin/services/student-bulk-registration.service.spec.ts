@@ -164,20 +164,27 @@ describe('StudentBulkRegistrationService', () => {
     });
   });
 
-  describe('uploadAndValidate Target Exam Validations', () => {
-    it('should accept and validate all 7 canonical Target Exam combinations', async () => {
+  describe('uploadAndValidate Target Exam & Password Validations', () => {
+    it('should accept and validate all 7 combinations using separate boolean columns (jee, cet, neet) with password', async () => {
       const rows = [
-        'John,9876543210,john@example.com,Gujarat,Ahmedabad,12th,JEE,ENGLISH',
-        'Rita,9876543211,rita@example.com,Gujarat,Ahmedabad,12th,CET,ENGLISH',
-        'Rahul,9876543212,rahul@example.com,Gujarat,Ahmedabad,12th,NEET,ENGLISH',
-        'Amit,9876543213,amit@example.com,Gujarat,Ahmedabad,12th,NEET + JEE,ENGLISH',
-        'Sneha,9876543214,sneha@example.com,Gujarat,Ahmedabad,12th,NEET + State CET,ENGLISH',
-        'Raj,9876543215,raj@example.com,Gujarat,Ahmedabad,12th,JEE + State CET,ENGLISH',
-        'Vikas,9876543216,vikas@example.com,Gujarat,Ahmedabad,12th,JEE + NEET + State CET,ENGLISH',
+        // 1. JEE only
+        'John,9876543210,john@example.com,Gujarat,Ahmedabad,12th,Pass1234!,TRUE,FALSE,FALSE,ENGLISH',
+        // 2. CET only
+        'Rita,9876543211,rita@example.com,Gujarat,Ahmedabad,12th,Pass1234!,FALSE,TRUE,FALSE,ENGLISH',
+        // 3. NEET only
+        'Rahul,9876543212,rahul@example.com,Gujarat,Ahmedabad,12th,Pass1234!,FALSE,FALSE,TRUE,ENGLISH',
+        // 4. NEET + JEE
+        'Amit,9876543213,amit@example.com,Gujarat,Ahmedabad,12th,Pass1234!,TRUE,FALSE,TRUE,ENGLISH',
+        // 5. NEET + State CET
+        'Sneha,9876543214,sneha@example.com,Gujarat,Ahmedabad,12th,Pass1234!,FALSE,TRUE,TRUE,ENGLISH',
+        // 6. JEE + State CET
+        'Raj,9876543215,raj@example.com,Gujarat,Ahmedabad,12th,Pass1234!,TRUE,TRUE,FALSE,ENGLISH',
+        // 7. JEE + NEET + State CET
+        'Vikas,9876543216,vikas@example.com,Gujarat,Ahmedabad,12th,Pass1234!,TRUE,TRUE,TRUE,ENGLISH',
       ];
 
       const csvContent =
-        'Full Name,Mobile Number,Email,State,City,Class,Exam Target,Preferred Language\n' +
+        'Full Name,Mobile Number,Email,State,City,Class,Password,jee,cet,neet,Preferred Language\n' +
         rows.join('\n');
 
       const file = {
@@ -197,17 +204,91 @@ describe('StudentBulkRegistrationService', () => {
       expect(res.invalidRows).toBe(0);
     });
 
-    it('should reject invalid Target Exam values with INVALID_EXAM_TARGET', async () => {
-      const invalidRows = [
-        'User1,9876543220,,Gujarat,Ahmedabad,12th,JEE + CET,ENGLISH', // 'JEE + CET' is invalid (must be 'JEE + State CET')
-        'User2,9876543221,,Gujarat,Ahmedabad,12th,State CET,ENGLISH', // Standalone 'State CET' is invalid
-        'User3,9876543222,,Gujarat,Ahmedabad,12th,Physics,ENGLISH', // Subject name is invalid
-        'User4,9876543223,,Gujarat,Ahmedabad,12th,JEE + State NEET,ENGLISH', // Invalid combination
-        'User5,9876543224,,Gujarat,Ahmedabad,12th,Random Target,ENGLISH', // Random string is invalid
+    it('should accept and validate all 7 canonical Target Exam combinations using legacy target column when password is provided', async () => {
+      const rows = [
+        'John,9876543210,john@example.com,Gujarat,Ahmedabad,12th,Pass1234!,JEE,ENGLISH',
+        'Rita,9876543211,rita@example.com,Gujarat,Ahmedabad,12th,Pass1234!,CET,ENGLISH',
+        'Rahul,9876543212,rahul@example.com,Gujarat,Ahmedabad,12th,Pass1234!,NEET,ENGLISH',
+        'Amit,9876543213,amit@example.com,Gujarat,Ahmedabad,12th,Pass1234!,NEET + JEE,ENGLISH',
+        'Sneha,9876543214,sneha@example.com,Gujarat,Ahmedabad,12th,Pass1234!,NEET + State CET,ENGLISH',
+        'Raj,9876543215,raj@example.com,Gujarat,Ahmedabad,12th,Pass1234!,JEE + State CET,ENGLISH',
+        'Vikas,9876543216,vikas@example.com,Gujarat,Ahmedabad,12th,Pass1234!,JEE + NEET + State CET,ENGLISH',
       ];
 
       const csvContent =
-        'Full Name,Mobile Number,Email,State,City,Class,Exam Target,Preferred Language\n' +
+        'Full Name,Mobile Number,Email,State,City,Class,Password,Exam Target,Preferred Language\n' +
+        rows.join('\n');
+
+      const file = {
+        originalname: 'students.csv',
+        buffer: Buffer.from(csvContent),
+        size: csvContent.length,
+      } as any;
+
+      const res = await service.uploadAndValidate(
+        file,
+        { userId: 'admin-1', roles: ['SUPER_ADMIN'] },
+        { schoolId: 'school-abc-123' },
+      );
+
+      expect(res.totalRows).toBe(7);
+      expect(res.validRows).toBe(7);
+      expect(res.invalidRows).toBe(0);
+    });
+
+    it('should reject missing password with MISSING_PASSWORD', async () => {
+      const csvContent =
+        'Full Name,Mobile Number,Email,State,City,Class,Password,jee,cet,neet,Preferred Language\n' +
+        'NoPass,9876543219,,Gujarat,Ahmedabad,12th,,TRUE,FALSE,FALSE,ENGLISH';
+
+      const file = {
+        originalname: 'students.csv',
+        buffer: Buffer.from(csvContent),
+        size: csvContent.length,
+      } as any;
+
+      const res = await service.uploadAndValidate(
+        file,
+        { userId: 'admin-1', roles: ['SUPER_ADMIN'] },
+        { schoolId: 'school-abc-123' },
+      );
+
+      expect(res.totalRows).toBe(1);
+      expect(res.invalidRows).toBe(1);
+    });
+
+    it('should reject row when all three boolean flags are FALSE', async () => {
+      const csvContent =
+        'Full Name,Mobile Number,Email,State,City,Class,Password,jee,cet,neet,Preferred Language\n' +
+        'AllFalse,9876543218,,Gujarat,Ahmedabad,12th,Pass1234!,FALSE,FALSE,FALSE,ENGLISH';
+
+      const file = {
+        originalname: 'students.csv',
+        buffer: Buffer.from(csvContent),
+        size: csvContent.length,
+      } as any;
+
+      const res = await service.uploadAndValidate(
+        file,
+        { userId: 'admin-1', roles: ['SUPER_ADMIN'] },
+        { schoolId: 'school-abc-123' },
+      );
+
+      expect(res.totalRows).toBe(1);
+      expect(res.invalidRows).toBe(1);
+    });
+
+    it('should reject invalid Target Exam values with INVALID_EXAM_TARGET', async () => {
+      const invalidRows = [
+        'User1,9876543220,,Gujarat,Ahmedabad,12th,Pass1234!,JEE + CET,ENGLISH', // 'JEE + CET' is invalid (must be 'JEE + State CET')
+        'User2,9876543221,,Gujarat,Ahmedabad,12th,Pass1234!,State CET,ENGLISH', // Standalone 'State CET' is invalid
+        'User3,9876543222,,Gujarat,Ahmedabad,12th,Pass1234!,Physics,ENGLISH', // Subject name is invalid
+        'User4,9876543223,,Gujarat,Ahmedabad,12th,Pass1234!,JEE + State NEET,ENGLISH', // Invalid combination
+        'User5,9876543224,,Gujarat,Ahmedabad,12th,Pass1234!,Random Target,ENGLISH', // Random string is invalid
+      ];
+
+      const csvContent =
+        'Full Name,Mobile Number,Email,State,City,Class,Password,Exam Target,Preferred Language\n' +
         invalidRows.join('\n');
 
       const file = {
@@ -229,9 +310,9 @@ describe('StudentBulkRegistrationService', () => {
 
     it('should reject empty or whitespace-only Target Exam with MISSING_EXAM_TARGET', async () => {
       const csvContent =
-        'Full Name,Mobile Number,Email,State,City,Class,Exam Target,Preferred Language\n' +
-        'User1,9876543230,,Gujarat,Ahmedabad,12th,,ENGLISH\n' +
-        'User2,9876543231,,Gujarat,Ahmedabad,12th,   ,ENGLISH';
+        'Full Name,Mobile Number,Email,State,City,Class,Password,Exam Target,Preferred Language\n' +
+        'User1,9876543230,,Gujarat,Ahmedabad,12th,Pass1234!,,ENGLISH\n' +
+        'User2,9876543231,,Gujarat,Ahmedabad,12th,Pass1234!,   ,ENGLISH';
 
       const file = {
         originalname: 'students.csv',

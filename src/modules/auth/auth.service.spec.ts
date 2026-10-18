@@ -325,25 +325,16 @@ describe('AuthService (Passwordless & OTP Registration)', () => {
       );
     });
 
-    it('should request login OTP using Student ID (BRN-2026-000001) and send OTP to verified mobile', async () => {
+    it('should reject login OTP request using Student ID (disallowed in favor of password login)', async () => {
       prismaMock.user.findUnique.mockResolvedValue(null);
-      prismaMock.student.findFirst.mockResolvedValue({
-        id: 'student-profile-id',
-        studentCode: 'BRN-2026-000001',
-        user: mockStudentUser,
-      });
+      prismaMock.user.findFirst.mockResolvedValue(null);
 
-      const res = await authService.requestPasswordlessLoginOtp({
-        identifier: 'BRN-2026-000001',
-      });
-
-      expect(res.data.requiresOtp).toBe(true);
-      expect(res.data.loginRequestId).toMatch(/^LOGIN-/);
-      expect(otpServiceMock.sendOtp).toHaveBeenCalledWith(
-        '+919000000001',
-        'LOGIN',
-        expect.any(Object),
-      );
+      await expect(
+        authService.requestPasswordlessLoginOtp({
+          identifier: 'BRN-2026-000001',
+        }),
+      ).rejects.toThrow(NotFoundException);
+      expect(otpServiceMock.sendOtp).not.toHaveBeenCalled();
     });
 
     it('should request login OTP using Mobile number (+919000000001)', async () => {
@@ -457,6 +448,76 @@ describe('AuthService (Passwordless & OTP Registration)', () => {
         'LOGIN',
         expect.any(Object),
       );
+    });
+  });
+
+  describe('4. Student ID + Password Login (loginWithStudentId)', () => {
+    const studentUser = {
+      id: 'student-user-id',
+      email: 'student@brainros.test',
+      phone: '+919000000001',
+      mobileNumber: '+919000000001',
+      passwordHash: 'hashed-password',
+      status: 'ACTIVE',
+      isActive: true,
+      userRoles: [{ role: { name: 'STUDENT' } }],
+      student: {
+        id: 'student-profile-1',
+        studentId: 'STU001',
+        studentCode: 'BRN-2026-000001',
+        name: 'Test Student',
+      },
+    };
+
+    it('should authenticate student with valid studentId and password without calling OTP', async () => {
+      const studentRecord = {
+        id: 'student-profile-1',
+        studentId: 'STU001',
+        studentCode: 'BRN-2026-000001',
+        name: 'Test Student',
+        status: 'ACTIVE',
+        user: studentUser,
+      };
+
+      prismaMock.student.findFirst.mockResolvedValue(studentRecord);
+      prismaMock.user.update.mockResolvedValue(studentRecord.user);
+      prismaMock.user.findUnique.mockResolvedValue(studentUser);
+
+      const res = await authService.loginWithStudentId(
+        'BRN-2026-000001',
+        'ValidPassword123!',
+      );
+
+      expect(res.data.accessToken).toBe('mock-access-token');
+      expect(res.data.refreshToken).toBe('mock-refresh-token');
+      expect(res.data.student.studentId).toBe('STU001');
+      expect(otpServiceMock.sendOtp).not.toHaveBeenCalled();
+    });
+
+    it('should reject incorrect password with UnauthorizedException', async () => {
+      passwordServiceMock.comparePassword.mockResolvedValueOnce(false);
+      const studentRecord = {
+        id: 'student-profile-1',
+        studentId: 'STU001',
+        studentCode: 'BRN-2026-000001',
+        name: 'Test Student',
+        status: 'ACTIVE',
+        user: studentUser,
+      };
+
+      prismaMock.student.findFirst.mockResolvedValue(studentRecord);
+
+      await expect(
+        authService.loginWithStudentId('BRN-2026-000001', 'WrongPassword!'),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('should reject unknown Student ID with UnauthorizedException', async () => {
+      prismaMock.student.findFirst.mockResolvedValue(null);
+
+      await expect(
+        authService.loginWithStudentId('NON_EXISTENT_ID', 'SomePassword1!'),
+      ).rejects.toThrow(UnauthorizedException);
     });
   });
 });

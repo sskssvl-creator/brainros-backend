@@ -13,7 +13,12 @@ import {
   SortOrderEnum,
 } from '../dto/admin-students.dto';
 import { Prisma, StudentStatus, ParentLinkStatus, ParentRelationshipType } from '@prisma/client';
-import { CANONICAL_TARGET_EXAMS } from '../../../common/constants/target-exam.constant';
+import * as bcrypt from 'bcrypt';
+import {
+  CANONICAL_TARGET_EXAMS,
+  mapExamBooleansToCanonical,
+  mapCanonicalToExamBooleans,
+} from '../../../common/constants/target-exam.constant';
 
 @Injectable()
 export class AdminStudentsService {
@@ -251,10 +256,30 @@ export class AdminStudentsService {
           studentId: true,
           studentCode: true,
           name: true,
+          jee: true,
+          cet: true,
+          neet: true,
           state: true,
           district: true,
           schoolCollege: true,
           status: true,
+          admissionYear: true,
+          preferredLanguageId: true,
+          preferredLanguage: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+            },
+          },
+          institutionId: true,
+          institution: {
+            select: {
+              id: true,
+              name: true,
+              code: true,
+            },
+          },
           createdAt: true,
           updatedAt: true,
           user: {
@@ -265,6 +290,7 @@ export class AdminStudentsService {
               phone: true,
               status: true,
               isActive: true,
+              isVerified: true,
             },
           },
           studentClass: {
@@ -351,11 +377,18 @@ export class AdminStudentsService {
         district: s.districtRef ? { id: s.districtRef.id, name: s.districtRef.name, code: s.districtRef.code } : { name: s.district },
         class: s.studentClass ? { id: s.studentClass.id, name: s.studentClass.name } : null,
         examTarget: s.examTarget ? { id: s.examTarget.id, name: s.examTarget.name } : null,
+        preferredLanguage: s.preferredLanguage ? { id: s.preferredLanguage.id, name: s.preferredLanguage.name, code: s.preferredLanguage.code } : null,
+        institution: s.institution ? { id: s.institution.id, name: s.institution.name, code: s.institution.code } : null,
+        admissionYear: s.admissionYear ?? null,
+        jee: s.jee,
+        cet: s.cet,
+        neet: s.neet,
         institutions,
         status: s.status,
         createdAt: s.createdAt,
         parentsCount: s.parentLinks.length,
         hasParent: s.parentLinks.length > 0,
+        isVerified: s.user?.isVerified ?? false,
       };
     });
 
@@ -853,7 +886,7 @@ export class AdminStudentsService {
    * Fetch dynamic master data filter options for /admin/students
    */
   async getFilterOptions() {
-    const [states, districts, classes, examTargets, institutions] =
+    const [states, districts, classes, examTargets, institutions, languages] =
       await Promise.all([
         this.prisma.state.findMany({
           where: { isActive: true },
@@ -878,7 +911,30 @@ export class AdminStudentsService {
           select: { id: true, name: true, code: true },
           orderBy: { name: 'asc' },
         }),
+        this.prisma.preferredLanguage.findMany({
+          where: { isActive: true },
+          select: { id: true, name: true, code: true },
+          orderBy: { name: 'asc' },
+        }),
       ]);
+
+    const distinctYears = await this.prisma.student.findMany({
+      where: { admissionYear: { not: null } },
+      select: { admissionYear: true },
+      distinct: ['admissionYear'],
+      orderBy: { admissionYear: 'desc' },
+    });
+    const currentYear = new Date().getFullYear();
+    const yearSet = new Set<number>([
+      currentYear + 2,
+      currentYear + 1,
+      currentYear,
+      currentYear - 1,
+      currentYear - 2,
+      currentYear - 3,
+      ...distinctYears.map((y) => y.admissionYear!).filter(Boolean),
+    ]);
+    const admissionYears = Array.from(yearSet).sort((a, b) => b - a);
 
     const TARGET_ORDER = CANONICAL_TARGET_EXAMS;
     const filteredExamTargets = examTargets
@@ -895,6 +951,8 @@ export class AdminStudentsService {
       classes,
       examTargets: filteredExamTargets,
       institutions,
+      languages,
+      admissionYears,
       statuses: [
         { label: 'Active', value: 'ACTIVE' },
         { label: 'Pending', value: 'PENDING' },
@@ -902,6 +960,101 @@ export class AdminStudentsService {
         { label: 'Inactive', value: 'INACTIVE' },
         { label: 'Archived', value: 'ARCHIVED' },
       ],
+    };
+  }
+
+  /**
+   * Fetch single student complete profile for Super Admin viewing/editing
+   */
+  async getStudentById(studentId: string) {
+    const s = await this.prisma.student.findUnique({
+      where: { id: studentId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            mobileNumber: true,
+            phone: true,
+            status: true,
+            isActive: true,
+            isVerified: true,
+          },
+        },
+        studentClass: { select: { id: true, name: true } },
+        examTarget: { select: { id: true, name: true } },
+        preferredLanguage: { select: { id: true, name: true, code: true } },
+        institution: { select: { id: true, name: true, code: true } },
+        stateRef: { select: { id: true, name: true, code: true } },
+        districtRef: { select: { id: true, name: true, code: true } },
+        batchMemberships: {
+          where: { status: 'ACTIVE' },
+          select: {
+            id: true,
+            batch: {
+              select: {
+                id: true,
+                name: true,
+                institution: { select: { id: true, name: true, code: true } },
+              },
+            },
+          },
+        },
+        parentLinks: {
+          where: { status: 'ACTIVE' },
+          select: { id: true },
+        },
+      },
+    });
+
+    if (!s) {
+      throw new NotFoundException(`Student with ID '${studentId}' not found.`);
+    }
+
+    const institutions: Array<{
+      id: string;
+      name: string;
+      code: string;
+      batchName?: string;
+    }> = s.batchMemberships.map((bm) => ({
+      id: bm.batch.institution.id,
+      name: bm.batch.institution.name,
+      code: bm.batch.institution.code,
+      batchName: bm.batch.name,
+    }));
+
+    if (s.institution && !institutions.some((inst) => inst.id === s.institutionId)) {
+      institutions.unshift({
+        id: s.institution.id,
+        name: s.institution.name,
+        code: s.institution.code,
+      });
+    }
+
+    return {
+      id: s.id,
+      studentId: s.studentId,
+      studentCode: s.studentCode || s.studentId,
+      name: s.name,
+      email: s.user?.email || '—',
+      mobile: s.user?.mobileNumber || s.user?.phone || '—',
+      schoolCollege: s.schoolCollege || '—',
+      state: s.stateRef ? { id: s.stateRef.id, name: s.stateRef.name, code: s.stateRef.code } : { name: s.state },
+      district: s.districtRef ? { id: s.districtRef.id, name: s.districtRef.name, code: s.districtRef.code } : { name: s.district },
+      class: s.studentClass ? { id: s.studentClass.id, name: s.studentClass.name } : null,
+      examTarget: s.examTarget ? { id: s.examTarget.id, name: s.examTarget.name } : null,
+      preferredLanguage: s.preferredLanguage ? { id: s.preferredLanguage.id, name: s.preferredLanguage.name, code: s.preferredLanguage.code } : null,
+      institution: s.institution ? { id: s.institution.id, name: s.institution.name, code: s.institution.code } : null,
+      admissionYear: s.admissionYear ?? null,
+      jee: s.jee,
+      cet: s.cet,
+      neet: s.neet,
+      institutions,
+      status: s.status,
+      createdAt: s.createdAt,
+      parentsCount: s.parentLinks.length,
+      hasParent: s.parentLinks.length > 0,
+      isVerified: s.user?.isVerified ?? false,
     };
   }
 
@@ -1196,7 +1349,7 @@ export class AdminStudentsService {
   }
 
   /**
-   * Update student details (Name, Email, Mobile, School, Class, Target, Location, Status)
+   * Update student details (Name, StudentCode, Email, Mobile, School, Institution, Class, Target, Language, AdmissionYear, Location, Status, Password)
    */
   async updateStudent(studentId: string, dto: any, actorUserId: string) {
     const student = await this.prisma.student.findUnique({
@@ -1209,68 +1362,346 @@ export class AdminStudentsService {
     }
 
     const studentData: Prisma.StudentUpdateInput = {};
-    if (dto.name !== undefined) studentData.name = dto.name.trim();
-    if (dto.schoolCollege !== undefined) studentData.schoolCollege = dto.schoolCollege.trim();
-    if (dto.status !== undefined) studentData.status = dto.status as StudentStatus;
+    const userData: Prisma.UserUpdateInput = {};
 
+    // 1. Name update (sync student and user)
+    if (dto.name !== undefined) {
+      const trimmedName = dto.name.trim();
+      studentData.name = trimmedName;
+      if (student.userId) {
+        userData.name = trimmedName;
+      }
+    }
+
+    // 2. Student Code / Roll Number (Read-only once assigned)
+    if (!student.studentCode && dto.studentCode !== undefined && dto.studentCode.trim() !== '') {
+      const trimmedCode = dto.studentCode.trim().toUpperCase();
+      const existingCode = await this.prisma.student.findFirst({
+        where: {
+          studentCode: { equals: trimmedCode, mode: 'insensitive' },
+          id: { not: studentId },
+        },
+      });
+      if (existingCode) {
+        throw new BadRequestException(
+          `Student Code '${trimmedCode}' is already assigned to another student.`,
+        );
+      }
+      studentData.studentCode = trimmedCode;
+    }
+
+    // 3. School / College
+    if (dto.schoolCollege !== undefined) studentData.schoolCollege = dto.schoolCollege.trim();
+
+    // 4. Institution relation
+    if (dto.institutionId !== undefined) {
+      if (dto.institutionId) {
+        studentData.institution = { connect: { id: dto.institutionId } };
+      } else {
+        studentData.institution = { disconnect: true };
+      }
+    }
+
+    // 5. Academic Class
     if (dto.classId) {
       studentData.studentClass = { connect: { id: dto.classId } };
     }
+
+    // 6. Preferred Language
+    if (dto.preferredLanguageId !== undefined) {
+      if (dto.preferredLanguageId) {
+        studentData.preferredLanguage = { connect: { id: dto.preferredLanguageId } };
+      }
+    }
+
+    // 7. Admission Year
+    if (dto.admissionYear !== undefined) {
+      studentData.admissionYear = dto.admissionYear ? Number(dto.admissionYear) : null;
+    }
+
+    // 8. Status update (sync student and user)
+    if (dto.status !== undefined) {
+      studentData.status = dto.status as StudentStatus;
+      if (student.userId) {
+        if (dto.status === 'ACTIVE') {
+          userData.status = 'ACTIVE';
+          userData.isActive = true;
+        } else if (dto.status === 'INACTIVE') {
+          userData.status = 'DISABLED';
+          userData.isActive = false;
+        } else if (dto.status === 'SUSPENDED') {
+          userData.status = 'SUSPENDED';
+          userData.isActive = false;
+        } else if (dto.status === 'PENDING' || dto.status === 'PENDING_VERIFICATION') {
+          userData.status = 'PENDING';
+          userData.isActive = false;
+        }
+      }
+    }
+
+    // 9. Verification flag
+    if (dto.isVerified !== undefined && student.userId) {
+      userData.isVerified = Boolean(dto.isVerified);
+      if (dto.isVerified) {
+        userData.mobileVerifiedAt = new Date();
+        userData.emailVerifiedAt = new Date();
+      }
+    }
+
+    if (dto.isActive !== undefined && student.userId) {
+      userData.isActive = Boolean(dto.isActive);
+    }
+
+    // 10. Exam Target and flags
     if (dto.examTargetId) {
       studentData.examTarget = { connect: { id: dto.examTargetId } };
     }
-    if (dto.stateId !== undefined) {
-      studentData.stateRef = dto.stateId ? { connect: { id: dto.stateId } } : { disconnect: true };
-    }
-    if (dto.districtId !== undefined) {
-      studentData.districtRef = dto.districtId ? { connect: { id: dto.districtId } } : { disconnect: true };
-    }
 
-    if (dto.state !== undefined) studentData.state = dto.state;
-    if (dto.district !== undefined) studentData.district = dto.district;
+    // Handle separate JEE, CET, NEET boolean flags
+    if (dto.jee !== undefined || dto.cet !== undefined || dto.neet !== undefined) {
+      const newJee = dto.jee !== undefined ? Boolean(dto.jee) : (student.jee ?? false);
+      const newCet = dto.cet !== undefined ? Boolean(dto.cet) : (student.cet ?? false);
+      const newNeet = dto.neet !== undefined ? Boolean(dto.neet) : (student.neet ?? false);
 
-    await this.prisma.student.update({
-      where: { id: studentId },
-      data: studentData,
-    });
+      if (!newJee && !newCet && !newNeet) {
+        throw new BadRequestException('At least one target exam (JEE, CET, or NEET) must be selected.');
+      }
 
-    // Update associated User account email & mobile number if changed
-    if (student.userId) {
-      const userData: Prisma.UserUpdateInput = {};
-      if (dto.email !== undefined && dto.email.trim().toLowerCase() !== (student.user?.email || '')) {
-        const newEmail = dto.email.trim().toLowerCase();
-        if (newEmail) {
-          const existing = await this.prisma.user.findUnique({ where: { email: newEmail } });
-          if (existing && existing.id !== student.userId) {
-            throw new BadRequestException('Email is already registered by another user.');
-          }
-          userData.email = newEmail;
+      studentData.jee = newJee;
+      studentData.cet = newCet;
+      studentData.neet = newNeet;
+
+      const canonicalName = mapExamBooleansToCanonical(newJee, newCet, newNeet);
+      if (canonicalName) {
+        const canonicalRecord = await this.prisma.examTarget.findFirst({
+          where: { name: { equals: canonicalName, mode: 'insensitive' } },
+        });
+        if (canonicalRecord) {
+          studentData.examTarget = { connect: { id: canonicalRecord.id } };
         }
       }
 
-      if (dto.mobile !== undefined && dto.mobile.trim() !== (student.user?.mobileNumber || '')) {
-        const newMobile = dto.mobile.trim();
-        if (newMobile) {
-          const existing = await this.prisma.user.findFirst({
-            where: { OR: [{ mobileNumber: newMobile }, { phone: newMobile }] },
-          });
-          if (existing && existing.id !== student.userId) {
-            throw new BadRequestException('Mobile number is already registered by another user.');
-          }
-          userData.mobileNumber = newMobile;
-          userData.phone = newMobile;
-        }
+      // Sync StudentExamTarget junction records
+      const baseTargets = await this.prisma.examTarget.findMany({
+        where: { name: { in: ['JEE', 'CET', 'NEET'] } },
+      });
+      const jeeTarget = baseTargets.find((t) => t.name === 'JEE');
+      const cetTarget = baseTargets.find((t) => t.name === 'CET');
+      const neetTarget = baseTargets.find((t) => t.name === 'NEET');
+
+      if (newJee && jeeTarget) {
+        await this.prisma.studentExamTarget.upsert({
+          where: { studentId_examTargetId: { studentId, examTargetId: jeeTarget.id } },
+          update: {},
+          create: { studentId, examTargetId: jeeTarget.id },
+        });
+      } else if (jeeTarget) {
+        await this.prisma.studentExamTarget.deleteMany({
+          where: { studentId, examTargetId: jeeTarget.id },
+        });
       }
 
-      if (Object.keys(userData).length > 0) {
-        await this.prisma.user.update({
-          where: { id: student.userId },
-          data: userData,
+      if (newCet && cetTarget) {
+        await this.prisma.studentExamTarget.upsert({
+          where: { studentId_examTargetId: { studentId, examTargetId: cetTarget.id } },
+          update: {},
+          create: { studentId, examTargetId: cetTarget.id },
+        });
+      } else if (cetTarget) {
+        await this.prisma.studentExamTarget.deleteMany({
+          where: { studentId, examTargetId: cetTarget.id },
+        });
+      }
+
+      if (newNeet && neetTarget) {
+        await this.prisma.studentExamTarget.upsert({
+          where: { studentId_examTargetId: { studentId, examTargetId: neetTarget.id } },
+          update: {},
+          create: { studentId, examTargetId: neetTarget.id },
+        });
+      } else if (neetTarget) {
+        await this.prisma.studentExamTarget.deleteMany({
+          where: { studentId, examTargetId: neetTarget.id },
         });
       }
     }
 
-    // Audit Log
+    // 11. State & District
+    const isUuid = (val?: string): boolean =>
+      Boolean(val && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val));
+
+    let matchedStateRecord: { id: string; name: string } | null = null;
+    if (dto.state !== undefined || dto.stateId !== undefined) {
+      const stateVal = (dto.stateId || dto.state || '').trim();
+      if (!stateVal) {
+        studentData.stateRef = { disconnect: true };
+        studentData.state = '';
+      } else {
+        if (dto.state !== undefined) {
+          studentData.state = dto.state.trim();
+        }
+
+        if (isUuid(dto.stateId)) {
+          const found = await this.prisma.state.findUnique({
+            where: { id: dto.stateId },
+            select: { id: true, name: true },
+          });
+          if (found) {
+            matchedStateRecord = found;
+          }
+        }
+
+        if (!matchedStateRecord && stateVal) {
+          matchedStateRecord = await this.prisma.state.findFirst({
+            where: {
+              OR: [
+                { name: { equals: stateVal, mode: 'insensitive' } },
+                { code: { equals: stateVal, mode: 'insensitive' } },
+              ],
+            },
+            select: { id: true, name: true },
+          });
+        }
+
+        if (matchedStateRecord) {
+          studentData.stateRef = { connect: { id: matchedStateRecord.id } };
+          if (!studentData.state) {
+            studentData.state = matchedStateRecord.name;
+          }
+        }
+      }
+    }
+
+    if (dto.district !== undefined || dto.districtId !== undefined) {
+      const districtVal = (dto.districtId || dto.district || '').trim();
+      if (!districtVal) {
+        studentData.districtRef = { disconnect: true };
+        studentData.district = '';
+      } else {
+        if (dto.district !== undefined) {
+          studentData.district = dto.district.trim();
+        }
+
+        let matchedDistrictRecord: { id: string; name: string } | null = null;
+        if (isUuid(dto.districtId)) {
+          const found = await this.prisma.district.findUnique({
+            where: { id: dto.districtId },
+            select: { id: true, name: true },
+          });
+          if (found) {
+            matchedDistrictRecord = found;
+          }
+        }
+
+        if (!matchedDistrictRecord && districtVal) {
+          matchedDistrictRecord = await this.prisma.district.findFirst({
+            where: {
+              name: { equals: districtVal, mode: 'insensitive' },
+              ...(matchedStateRecord ? { stateId: matchedStateRecord.id } : {}),
+            },
+            select: { id: true, name: true },
+          });
+        }
+
+        if (matchedDistrictRecord) {
+          studentData.districtRef = { connect: { id: matchedDistrictRecord.id } };
+          if (!studentData.district) {
+            studentData.district = matchedDistrictRecord.name;
+          }
+        }
+      }
+    }
+
+    // 12. User Email
+    if (student.userId && dto.email !== undefined && dto.email.trim().toLowerCase() !== (student.user?.email || '')) {
+      const newEmail = dto.email.trim().toLowerCase();
+      if (newEmail) {
+        const existing = await this.prisma.user.findUnique({ where: { email: newEmail } });
+        if (existing && existing.id !== student.userId) {
+          throw new BadRequestException('Email is already registered by another user.');
+        }
+        userData.email = newEmail;
+      }
+    }
+
+    // 13. User Mobile
+    if (student.userId && dto.mobile !== undefined && dto.mobile.trim() !== (student.user?.mobileNumber || '')) {
+      const newMobile = dto.mobile.trim();
+      if (newMobile) {
+        const existing = await this.prisma.user.findFirst({
+          where: { OR: [{ mobileNumber: newMobile }, { phone: newMobile }] },
+        });
+        if (existing && existing.id !== student.userId) {
+          throw new BadRequestException('Mobile number is already registered by another user.');
+        }
+        userData.mobileNumber = newMobile;
+        userData.phone = newMobile;
+      }
+    }
+
+    // 14. Password update with BCRYPT HASH
+    if (dto.password !== undefined && dto.password.trim() !== '') {
+      if (!student.userId) {
+        throw new BadRequestException('Student has no linked user account to set password.');
+      }
+
+      const trimmedPassword = dto.password.trim();
+      if (trimmedPassword.length < 6) {
+        throw new BadRequestException('Password must be at least 6 characters long.');
+      }
+
+      // Hash password using bcrypt with 10 salt rounds
+      const hashedPassword = await bcrypt.hash(trimmedPassword, 10);
+      userData.passwordHash = hashedPassword;
+      userData.authVersion = { increment: 1 };
+
+      // Revoke existing sessions and refresh tokens upon password update
+      await this.prisma.refreshToken.updateMany({
+        where: { userId: student.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      await this.prisma.loginSession.updateMany({
+        where: { userId: student.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+
+      try {
+        await this.prisma.auditLog.create({
+          data: {
+            actorUserId,
+            action: 'STUDENT_PASSWORD_RESET',
+            entityType: 'USER',
+            entityId: student.userId,
+            reason: `Admin reset password for student ${student.name} (${student.studentCode || student.studentId})`,
+            metadata: {
+              studentId: student.id,
+              studentCode: student.studentCode,
+              resetAt: new Date().toISOString(),
+            },
+          },
+        });
+      } catch (e) {
+        this.logger.warn(`Failed to write audit log for password update: ${e}`);
+      }
+    }
+
+    // Save Student changes
+    if (Object.keys(studentData).length > 0) {
+      await this.prisma.student.update({
+        where: { id: studentId },
+        data: studentData,
+      });
+    }
+
+    // Save User changes
+    if (student.userId && Object.keys(userData).length > 0) {
+      await this.prisma.user.update({
+        where: { id: student.userId },
+        data: userData,
+      });
+    }
+
+    // Audit Log for profile update
     try {
       await this.prisma.auditLog.create({
         data: {
@@ -1278,7 +1709,14 @@ export class AdminStudentsService {
           action: 'STUDENT_PROFILE_UPDATED',
           entityType: 'STUDENT',
           entityId: studentId,
-          reason: `Admin updated profile for student ${student.name} (${student.studentId})`,
+          reason: `Admin updated profile for student ${student.name} (${student.studentCode || student.studentId})`,
+          metadata: {
+            updatedFields: [
+              ...Object.keys(studentData),
+              ...Object.keys(userData).map((k) => `user.${k}`),
+            ],
+            updatedAt: new Date().toISOString(),
+          },
         },
       });
     } catch (e) {
@@ -1288,13 +1726,86 @@ export class AdminStudentsService {
     return this.prisma.student.findUnique({
       where: { id: studentId },
       include: {
-        user: { select: { id: true, email: true, mobileNumber: true, status: true, isActive: true } },
+        user: { select: { id: true, email: true, mobileNumber: true, phone: true, status: true, isActive: true, isVerified: true } },
         studentClass: true,
         examTarget: true,
+        preferredLanguage: true,
+        institution: true,
         stateRef: true,
         districtRef: true,
+        studentExamTargets: { include: { examTarget: true } },
       },
     });
+  }
+
+  /**
+   * Reset student password with bcrypt hash and session revocation
+   */
+  async resetStudentPassword(studentId: string, newPassword: string, actorUserId: string) {
+    const student = await this.prisma.student.findUnique({
+      where: { id: studentId },
+      include: { user: true },
+    });
+
+    if (!student) {
+      throw new NotFoundException(`Student with ID '${studentId}' not found.`);
+    }
+
+    if (!student.userId) {
+      throw new BadRequestException('Student has no linked user account to reset password.');
+    }
+
+    const trimmedPassword = (newPassword || '').trim();
+    if (trimmedPassword.length < 6) {
+      throw new BadRequestException('Password must be at least 6 characters long.');
+    }
+
+    // Hash password with bcrypt 10 salt rounds
+    const hashedPassword = await bcrypt.hash(trimmedPassword, 10);
+
+    await this.prisma.user.update({
+      where: { id: student.userId },
+      data: {
+        passwordHash: hashedPassword,
+        authVersion: { increment: 1 },
+      },
+    });
+
+    // Revoke existing sessions and refresh tokens
+    await this.prisma.refreshToken.updateMany({
+      where: { userId: student.userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    await this.prisma.loginSession.updateMany({
+      where: { userId: student.userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+
+    try {
+      await this.prisma.auditLog.create({
+        data: {
+          actorUserId,
+          action: 'STUDENT_PASSWORD_RESET',
+          entityType: 'USER',
+          entityId: student.userId,
+          reason: `Admin reset password for student ${student.name} (${student.studentCode || student.studentId})`,
+          metadata: {
+            studentId: student.id,
+            studentCode: student.studentCode,
+            resetAt: new Date().toISOString(),
+          },
+        },
+      });
+    } catch (e) {
+      this.logger.warn(`Failed to write audit log for password reset: ${e}`);
+    }
+
+    return {
+      success: true,
+      message: `Password for student '${student.name}' (${student.studentCode || student.studentId}) was reset successfully.`,
+      studentId: student.id,
+      studentCode: student.studentCode,
+    };
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -1319,8 +1830,26 @@ export class AdminStudentsService {
 
     if (query.classId) where.classId = query.classId;
     if (query.examTargetId) where.examTargetId = query.examTargetId;
-    if (query.stateId) where.stateId = query.stateId;
-    if (query.districtId) where.districtId = query.districtId;
+    if (query.stateId) {
+      const isUuidState = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(query.stateId);
+      if (isUuidState) {
+        where.stateId = query.stateId;
+      } else {
+        where.OR = [
+          { state: { equals: query.stateId, mode: 'insensitive' } },
+          { stateRef: { code: { equals: query.stateId, mode: 'insensitive' } } },
+          { stateRef: { name: { equals: query.stateId, mode: 'insensitive' } } },
+        ];
+      }
+    }
+    if (query.districtId) {
+      const isUuidDistrict = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(query.districtId);
+      if (isUuidDistrict) {
+        where.districtId = query.districtId;
+      } else {
+        where.district = { equals: query.districtId, mode: 'insensitive' };
+      }
+    }
     if (query.institutionId) where.institutionId = query.institutionId;
 
     if (query.examTarget && query.examTarget !== 'ALL') {

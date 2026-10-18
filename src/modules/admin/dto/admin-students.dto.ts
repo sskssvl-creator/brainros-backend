@@ -8,6 +8,8 @@ import {
   Max,
   IsNotEmpty,
   IsEmail,
+  IsBoolean,
+  MinLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -78,11 +80,11 @@ export class AdminStudentsQueryDto {
   examTargetId?: string;
 
   @IsOptional()
-  @IsUUID()
+  @IsString()
   stateId?: string;
 
   @IsOptional()
-  @IsUUID()
+  @IsString()
   districtId?: string;
 
   @IsOptional()
@@ -183,6 +185,10 @@ export class UpdateAdminStudentDto {
 
   @IsOptional()
   @IsString()
+  studentCode?: string;
+
+  @IsOptional()
+  @IsString()
   email?: string;
 
   @IsOptional()
@@ -192,6 +198,10 @@ export class UpdateAdminStudentDto {
   @IsOptional()
   @IsString()
   schoolCollege?: string;
+
+  @IsOptional()
+  @IsUUID()
+  institutionId?: string;
 
   @IsOptional()
   @IsString()
@@ -211,13 +221,54 @@ export class UpdateAdminStudentDto {
 
   @IsOptional()
   @IsUUID()
+  preferredLanguageId?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  admissionYear?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  jee?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  cet?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  neet?: boolean;
+
+  @IsOptional()
+  @IsString()
   stateId?: string;
 
   @IsOptional()
-  @IsUUID()
+  @IsString()
   districtId?: string;
 
   @IsOptional()
   @IsString()
   status?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(6, { message: 'Password must be at least 6 characters long.' })
+  password?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isVerified?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+}
+
+export class ResetStudentPasswordDto {
+  @IsNotEmpty({ message: 'Password is required.' })
+  @IsString()
+  @MinLength(6, { message: 'Password must be at least 6 characters long.' })
+  password: string;
 }
