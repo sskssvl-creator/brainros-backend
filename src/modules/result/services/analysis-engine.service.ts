@@ -1,5 +1,11 @@
-import { Injectable, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger, Optional } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  GeminiExamAnalysisService,
+  StudentExamAiContext,
+  GeminiExamPredictionResult,
+} from './gemini-exam-analysis.service';
 import {
   PerformanceThresholds,
   DEFAULT_PERFORMANCE_THRESHOLDS,
@@ -32,13 +38,17 @@ import {
   ParentSummarySection,
   BrainrosPerformanceIndexSection,
   PerformanceIndexMetric,
+  AiAnalysisMetadata,
 } from '../interfaces/analysis.interface';
 
 @Injectable()
 export class AnalysisEngineService {
   private readonly logger = new Logger(AnalysisEngineService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly geminiAnalysis?: GeminiExamAnalysisService,
+  ) {}
 
   /**
    * Helper to determine status based on configurable thresholds
@@ -675,6 +685,141 @@ export class AnalysisEngineService {
       : null;
     const estimatedRank = overallRankRecord?.rank ?? null;
 
+    // ── 11. Run / Fetch Gemini AI Predictive Analysis ─────────────────────
+    const existingMetadata = (result.metadata as any) || {};
+    let aiPredictions: GeminiExamPredictionResult;
+
+    if (
+      existingMetadata.aiAnalysis &&
+      existingMetadata.aiAnalysis.errorAnalysis &&
+      existingMetadata.aiAnalysis.fourteenDayPlan
+    ) {
+      aiPredictions = existingMetadata.aiAnalysis;
+    } else {
+      const sampleWrongQuestions = examQuestions
+        .filter((eq) => {
+          const a = answerMap.get(eq.id);
+          return a && !this.isAnswerCorrect(eq.question, a);
+        })
+        .slice(0, 8)
+        .map((eq, idx) => {
+          const a = answerMap.get(eq.id);
+          const correctOpt = eq.question?.options?.find((o: any) => o.isCorrect);
+          return {
+            questionNumber: idx + 1,
+            subjectName: eq.section?.name || eq.question?.chapter?.subject?.name || 'General',
+            chapterName: eq.question?.chapter?.name,
+            questionText: (eq.question as any)?.plainText || (eq.question as any)?.stemText || '',
+            studentAnswer: a?.selectedOption?.optionText || a?.numericalAnswer?.toString() || 'Selected option',
+            correctAnswer: correctOpt?.optionText || 'Correct Option',
+            timeSpentSeconds: questionTimeMap.get(eq.id) || 0,
+          };
+        });
+
+      const aiContext: StudentExamAiContext = {
+        student: {
+          id: attempt.studentId,
+          name: attempt.student?.name || attempt.student?.user?.name || 'Student',
+          studentCode: attempt.student?.studentCode || 'BR26-STU-001',
+          className: attempt.student?.studentClass?.name,
+          targetExam: exam.examTarget?.name,
+        },
+        exam: {
+          id: exam.id,
+          title: exam.title,
+          durationMinutes: exam.durationMinutes,
+          totalQuestions: result.totalQuestions,
+          maxScore: result.maxScore,
+          defaultMarksPerQuestion: exam.defaultMarksPerQuestion || 4,
+          negativeMarksPerQuestion: (exam.scoringRules?.[0] as any)?.negativeMarks || 1,
+        },
+        overall: {
+          score: result.totalScore,
+          maxScore: result.maxScore,
+          percentage: result.percentage,
+          accuracy: result.accuracy,
+          correctCount: result.correctAnswers,
+          wrongCount: result.wrongAnswers,
+          unattemptedCount: result.unattempted,
+          negativeMarksLost: totalNegativeMarksLost,
+          totalTimeUsedSeconds,
+          averageTimePerQuestionSeconds: avgTimePerQuestion,
+        },
+        subjects: subjectItems.map((s) => ({
+          subjectName: s.subjectName,
+          score: s.score,
+          maxScore: s.maxScore,
+          accuracy: s.accuracy,
+          percentage: s.percentage,
+          correct: s.correct,
+          wrong: s.wrong,
+          unattempted: s.unattempted,
+          timeSpentSeconds: s.timeSpentSeconds,
+        })),
+        chapters: chapterItems.map((c) => ({
+          chapterName: c.chapterName,
+          subjectName: c.subjectName,
+          totalQuestions: c.totalQuestions,
+          correct: c.correct,
+          wrong: c.wrong,
+          unattempted: c.unattempted,
+          accuracy: c.accuracy,
+          status: c.status,
+        })),
+        sampleWrongQuestions,
+        previousAttempts: previousAttempts.map((pa) => ({
+          testTitle: pa.exam?.title || 'Mock Test',
+          date: (pa.submittedAt || pa.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
+          score: pa.result?.totalScore ?? 0,
+          maxScore: pa.result?.maxScore ?? exam.totalMarks,
+          percentile: pa.candidateRanks?.[0]?.percentile ?? null,
+        })),
+      };
+
+      if (this.geminiAnalysis) {
+        aiPredictions = await this.geminiAnalysis.predictExamInsights(aiContext);
+      } else {
+        // Fallback generator when service is not injected
+        const fallbackService = new GeminiExamAnalysisService(new ConfigService());
+        aiPredictions = fallbackService.generateHeuristicFallback(aiContext);
+      }
+
+      // Persist AI predictions to Result.metadata asynchronously
+      if (this.prisma.result?.update) {
+        this.prisma.result
+          .update({
+            where: { id: result.id },
+            data: {
+              metadata: {
+                ...existingMetadata,
+                aiAnalysis: aiPredictions,
+              },
+            },
+          })
+          .catch((saveErr: any) => {
+            this.logger.warn(`Failed to persist AI analysis to metadata: ${saveErr.message}`);
+          });
+      }
+    }
+
+    // Override heuristic attempt strategy metrics with Gemini predictions if present
+    if (aiPredictions.speedAccuracyQuadrant) {
+      overall.speedAccuracyQuadrant = aiPredictions.speedAccuracyQuadrant;
+      attemptStrategy.accuracyVsSpeedProfile = aiPredictions.speedAccuracyQuadrant.replace(/_/g, ' ');
+    }
+    if (aiPredictions.strategicTakeaways?.length) {
+      attemptStrategy.strategicTakeaways = aiPredictions.strategicTakeaways;
+    }
+    if (aiPredictions.overAttemptingWarning !== undefined) {
+      attemptStrategy.overAttemptingWarning = aiPredictions.overAttemptingWarning;
+    }
+    if (aiPredictions.underAttemptingWarning !== undefined) {
+      attemptStrategy.underAttemptingWarning = aiPredictions.underAttemptingWarning;
+    }
+    if (aiPredictions.potentialScoreGainMessage) {
+      attemptStrategy.potentialScoreGainMessage = aiPredictions.potentialScoreGainMessage;
+    }
+
     // ═════════════════════════════════════════════════════════════════════════
     // BUILD ALL 14 CANONICAL SECTIONS MATCHING THE REFERENCE REPORT SPEC
     // ═════════════════════════════════════════════════════════════════════════
@@ -834,10 +979,14 @@ export class AnalysisEngineService {
       priorityWeaknesses.push('Final review round discipline and option elimination technique');
     }
 
-    const section6StrengthWeakness: StrengthWeaknessSection = {
-      topStrengths: topStrengths.slice(0, 4),
-      priorityWeaknesses: priorityWeaknesses.slice(0, 4),
-    };
+    const section6StrengthWeakness: StrengthWeaknessSection =
+      aiPredictions?.strengthWeakness?.topStrengths?.length &&
+      aiPredictions?.strengthWeakness?.priorityWeaknesses?.length
+        ? aiPredictions.strengthWeakness
+        : {
+            topStrengths: topStrengths.slice(0, 4),
+            priorityWeaknesses: priorityWeaknesses.slice(0, 4),
+          };
 
     // SECTION 7: Error Analysis
     const totalWrongCount = result.wrongAnswers;
@@ -885,14 +1034,17 @@ export class AnalysisEngineService {
       recoverableMistakes * (exam.defaultMarksPerQuestion || 4) + totalNegativeMarksLost * 0.75,
     );
 
-    const section7ErrorAnalysis: ErrorAnalysisSection = {
-      categories: errorCategories,
-      totalWrong: totalWrongCount,
-      potentialRecoverableMarks: Math.max(0, potentialRecoverableMarks),
-      narrative: potentialRecoverableMarks > 0
-        ? `Approximately ${potentialRecoverableMarks} marks could potentially be recovered by reducing avoidable calculation, reading, and silly mistakes. Maintain an Error Notebook after every BRAINROS test.`
-        : 'Excellent accuracy discipline observed with minimal avoidable errors. Keep maintaining precision during mock testing.',
-    };
+    const section7ErrorAnalysis: ErrorAnalysisSection =
+      aiPredictions?.errorAnalysis?.categories?.length
+        ? aiPredictions.errorAnalysis
+        : {
+            categories: errorCategories,
+            totalWrong: totalWrongCount,
+            potentialRecoverableMarks: Math.max(0, potentialRecoverableMarks),
+            narrative: potentialRecoverableMarks > 0
+              ? `Approximately ${potentialRecoverableMarks} marks could potentially be recovered by reducing avoidable calculation, reading, and silly mistakes. Maintain an Error Notebook after every BRAINROS test.`
+              : 'Excellent accuracy discipline observed with minimal avoidable errors. Keep maintaining precision during mock testing.',
+          };
 
     // SECTION 8: Time Management
     const timeRows: TimeManagementRow[] = subjectBenchmarkComparisons.map((b) => ({
@@ -908,28 +1060,31 @@ export class AnalysisEngineService {
         recommended: 20,
         actual: Math.max(0, Math.round(exam.durationMinutes - totalTimeUsedSeconds / 60)),
       },
-      roundsStrategy: [
-        {
-          round: 'Round 1 (First 50–60 mins)',
-          title: 'Direct & Easy Questions',
-          description: 'Solve all 100% confident, single-step questions instantly across all subjects.',
-        },
-        {
-          round: 'Round 2 (Next 60–70 mins)',
-          title: 'Moderate & Standard Problems',
-          description: 'Tackle multi-step conceptual problems requiring standard formulas and derivations.',
-        },
-        {
-          round: 'Round 3 (Next 25–30 mins)',
-          title: 'Difficult / Lengthy Numericals',
-          description: 'Attempt challenging calculations and complex assertion-reason questions.',
-        },
-        {
-          round: 'Final 15–20 minutes',
-          title: 'Verification & Review',
-          description: 'Review marked questions, check calculations, and confirm no answers were skipped accidentally.',
-        },
-      ],
+      roundsStrategy:
+        aiPredictions?.pacingRounds?.length
+          ? aiPredictions.pacingRounds
+          : [
+              {
+                round: 'Round 1 (First 50–60 mins)',
+                title: 'Direct & Easy Questions',
+                description: 'Solve all 100% confident, single-step questions instantly across all subjects.',
+              },
+              {
+                round: 'Round 2 (Next 60–70 mins)',
+                title: 'Moderate & Standard Problems',
+                description: 'Tackle multi-step conceptual problems requiring standard formulas and derivations.',
+              },
+              {
+                round: 'Round 3 (Next 25–30 mins)',
+                title: 'Difficult / Lengthy Numericals',
+                description: 'Attempt challenging calculations and complex assertion-reason questions.',
+              },
+              {
+                round: 'Final 15–20 minutes',
+                title: 'Verification & Review',
+                description: 'Review marked questions, check calculations, and confirm no answers were skipped accidentally.',
+              },
+            ],
     };
 
     // SECTION 9: Performance Trend
@@ -995,14 +1150,17 @@ export class AnalysisEngineService {
     const strongTarget = Math.min(maxScore, currScore + Math.max(45, Math.round((maxScore - currScore) * 0.5)));
     const excellentTarget = Math.min(maxScore, Math.max(strongTarget + 20, Math.round(maxScore * 0.92)));
 
-    const section10ExpectedPerformance: ExpectedPerformanceSection = {
-      currentScore: currScore,
-      maxScore,
-      shortTermTarget: shortTerm,
-      strongTarget: strongTarget,
-      excellentTarget: excellentTarget,
-      actionableMessage: 'Focus on accuracy, revision of priority weak chapters, and elimination of avoidable calculation mistakes to move to the next competitive bracket.',
-    };
+    const section10ExpectedPerformance: ExpectedPerformanceSection =
+      aiPredictions?.expectedPerformance?.shortTermTarget
+        ? aiPredictions.expectedPerformance
+        : {
+            currentScore: currScore,
+            maxScore,
+            shortTermTarget: shortTerm,
+            strongTarget: strongTarget,
+            excellentTarget: excellentTarget,
+            actionableMessage: 'Focus on accuracy, revision of priority weak chapters, and elimination of avoidable calculation mistakes to move to the next competitive bracket.',
+          };
 
     // SECTION 11: 14-Day Improvement Plan
     const sortedWeakChapters = [...criticalFocusChapters, ...revisionNeededChapters, ...chapterItems]
@@ -1096,61 +1254,67 @@ export class AnalysisEngineService {
       },
     ];
 
-    const section11FourteenDayPlan: FourteenDayImprovementPlanSection = { blocks };
+    const section11FourteenDayPlan: FourteenDayImprovementPlanSection =
+      aiPredictions?.fourteenDayPlan?.blocks?.length
+        ? aiPredictions.fourteenDayPlan
+        : { blocks };
 
     // SECTION 12: Personalized Action Checklist
-    const section12ActionChecklist: PersonalizedActionChecklistSection = {
-      items: [
-        {
-          id: 'act-1',
-          text: `Revise weak chapters (${priorityWeaknesses[0] || 'core concepts'}) every 3 days without fail.`,
-          category: 'Revision',
-          isKeyAction: true,
-        },
-        {
-          id: 'act-2',
-          text: 'Maintain an Error Notebook and log every incorrect question immediately.',
-          category: 'Error Reduction',
-          isKeyAction: true,
-        },
-        {
-          id: 'act-3',
-          text: `Practise at least 50 ${subjectItems[0]?.subjectName || 'Physics'} numerical problems daily.`,
-          category: 'Practice',
-          isKeyAction: true,
-        },
-        {
-          id: 'act-4',
-          text: 'Revise NCERT textbook line-by-line and review all highlighted summaries.',
-          category: 'Theory',
-          isKeyAction: false,
-        },
-        {
-          id: 'act-5',
-          text: 'Analyse root causes of every incorrect question before moving to the next chapter.',
-          category: 'Error Reduction',
-          isKeyAction: true,
-        },
-        {
-          id: 'act-6',
-          text: 'Avoid blind guessing and strictly apply the 50-50 elimination rule during tests.',
-          category: 'Strategy',
-          isKeyAction: true,
-        },
-        {
-          id: 'act-7',
-          text: 'Improve calculation speed by doing scratch-pad arithmetic neatly in designated columns.',
-          category: 'Speed',
-          isKeyAction: false,
-        },
-        {
-          id: 'act-8',
-          text: 'Take every BRAINROS mock exam under actual, uninterrupted examination conditions.',
-          category: 'Discipline',
-          isKeyAction: true,
-        },
-      ],
-    };
+    const section12ActionChecklist: PersonalizedActionChecklistSection =
+      aiPredictions?.actionChecklist?.items?.length
+        ? aiPredictions.actionChecklist
+        : {
+            items: [
+              {
+                id: 'act-1',
+                text: `Revise weak chapters (${priorityWeaknesses[0] || 'core concepts'}) every 3 days without fail.`,
+                category: 'Revision',
+                isKeyAction: true,
+              },
+              {
+                id: 'act-2',
+                text: 'Maintain an Error Notebook and log every incorrect question immediately.',
+                category: 'Error Reduction',
+                isKeyAction: true,
+              },
+              {
+                id: 'act-3',
+                text: `Practise at least 50 ${subjectItems[0]?.subjectName || 'Physics'} numerical problems daily.`,
+                category: 'Practice',
+                isKeyAction: true,
+              },
+              {
+                id: 'act-4',
+                text: 'Revise NCERT textbook line-by-line and review all highlighted summaries.',
+                category: 'Theory',
+                isKeyAction: false,
+              },
+              {
+                id: 'act-5',
+                text: 'Analyse root causes of every incorrect question before moving to the next chapter.',
+                category: 'Error Reduction',
+                isKeyAction: true,
+              },
+              {
+                id: 'act-6',
+                text: 'Avoid blind guessing and strictly apply the 50-50 elimination rule during tests.',
+                category: 'Strategy',
+                isKeyAction: true,
+              },
+              {
+                id: 'act-7',
+                text: 'Improve calculation speed by doing scratch-pad arithmetic neatly in designated columns.',
+                category: 'Speed',
+                isKeyAction: false,
+              },
+              {
+                id: 'act-8',
+                text: 'Take every BRAINROS mock exam under actual, uninterrupted examination conditions.',
+                category: 'Discipline',
+                isKeyAction: true,
+              },
+            ],
+          };
 
     // SECTION 13: Parent Summary
     const strongSubjectNames = subjectItems.filter((s) => s.accuracy >= 75).map((s) => s.subjectName).join(' and ') || subjectItems[0]?.subjectName || 'Core Subjects';
@@ -1159,15 +1323,18 @@ export class AnalysisEngineService {
     const percentileStr = overallPercentile !== null ? `with a ${overallPercentile} percentile` : '';
     const parentParagraph = `Your ward ${student?.name || 'the student'} has achieved ${result.totalScore}/${result.maxScore} marks (${Math.round(result.percentage * 10) / 10}%) ${percentileStr}, demonstrating a ${section2OverallPerformance.performanceLevel.toLowerCase()} level of preparation. The student performed particularly well in ${strongSubjectNames}, while the major opportunity for score gain is in ${weakSubjectNames}, along with reducing avoidable calculation and silly mistakes. With focused chapter revision and regular analysis of BRAINROS mock tests, the student has the potential to move towards the ${shortTerm}–${strongTarget}+ score range. The objective is not simply taking more tests, but analysing every test and converting mistakes into marks.`;
 
-    const section13ParentSummary: ParentSummarySection = {
-      summaryParagraph: parentParagraph,
-      keyHighlights: [
-        `Scored ${result.totalScore}/${result.maxScore} (${Math.round(result.percentage * 10) / 10}%) with ${Math.round(result.accuracy * 10) / 10}% accuracy.`,
-        `Solid performance in ${strongSubjectNames}.`,
-        `Immediate score gain opportunity of ~${Math.max(10, potentialRecoverableMarks)} marks in ${weakSubjectNames}.`,
-      ],
-      potentialScoreRange: `${shortTerm}–${strongTarget}+`,
-    };
+    const section13ParentSummary: ParentSummarySection =
+      aiPredictions?.parentSummary?.summaryParagraph
+        ? aiPredictions.parentSummary
+        : {
+            summaryParagraph: parentParagraph,
+            keyHighlights: [
+              `Scored ${result.totalScore}/${result.maxScore} (${Math.round(result.percentage * 10) / 10}%) with ${Math.round(result.accuracy * 10) / 10}% accuracy.`,
+              `Solid performance in ${strongSubjectNames}.`,
+              `Immediate score gain opportunity of ~${Math.max(10, potentialRecoverableMarks)} marks in ${weakSubjectNames}.`,
+            ],
+            potentialScoreRange: `${shortTerm}–${strongTarget}+`,
+          };
 
     // SECTION 14: BRAINROS Performance Index
     const academicStrengthStars = Math.min(5, Math.max(1, Math.round((result.percentage / 20) * 10) / 10));
@@ -1194,10 +1361,13 @@ export class AnalysisEngineService {
       ? 'GOOD'
       : 'NEEDS ATTENTION';
 
-    const section14PerformanceIndex: BrainrosPerformanceIndexSection = {
-      metrics: performanceMetrics,
-      overallRating: overallRatingStr,
-    };
+    const section14PerformanceIndex: BrainrosPerformanceIndexSection =
+      aiPredictions?.performanceIndex?.metrics?.length
+        ? aiPredictions.performanceIndex
+        : {
+            metrics: performanceMetrics,
+            overallRating: overallRatingStr,
+          };
 
     return {
       attemptId,
@@ -1206,6 +1376,7 @@ export class AnalysisEngineService {
       examTargetName: exam.examTarget.name,
       calculatedAt: result.calculatedAt,
       thresholdsUsed: thresholds,
+      aiMetadata: aiPredictions?.metadata,
       overall,
       subjects: {
         items: subjectItems,

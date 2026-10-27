@@ -460,4 +460,52 @@ describe('ExamAttemptService', () => {
       ).rejects.toThrow(BadRequestException);
     });
   });
+
+  // ── getAttemptStatus ───────────────────────────────────────────────────
+  describe('getAttemptStatus', () => {
+    it('returns languageId, displayLanguageId, and language metadata along with attempt status and answers', async () => {
+      const mockAttempt = {
+        id: 'att-123',
+        examId: 'exam-123',
+        studentId: 'stud-123',
+        languageId: 'lang-hi-uuid',
+        displayLanguageId: 'lang-hi-uuid',
+        language: {
+          id: 'lang-hi-uuid',
+          code: 'hi',
+          name: 'Hindi',
+          nativeName: 'हिन्दी',
+        },
+        startedAt: new Date(),
+        serverEndTime: new Date(Date.now() + 3600000),
+        scheduleId: 'sch-123',
+        examVersionId: 'ver-123',
+        status: { id: 'status-1', name: 'IN_PROGRESS' },
+        student: { id: 'stud-123', userId: 'user-123' },
+      };
+
+      prismaMock.attempt.findUnique.mockResolvedValue(mockAttempt);
+      prismaMock.answer.findMany.mockResolvedValue([
+        {
+          examQuestionId: 'eq-1',
+          selectedOptionId: 'opt-1',
+          numericalAnswer: null,
+          selectedOptions: null,
+          isMarkedForReview: false,
+          answeredAt: new Date(),
+        },
+      ]);
+
+      const res = await service.getAttemptStatus('att-123', 'stud-123');
+
+      expect(res.attemptId).toBe('att-123');
+      expect(res.status).toBe('IN_PROGRESS');
+      expect(res.languageId).toBe('lang-hi-uuid');
+      expect(res.displayLanguageId).toBe('lang-hi-uuid');
+      expect(res.language?.code).toBe('hi');
+      expect(res.language?.name).toBe('Hindi');
+      expect(res.answers).toHaveLength(1);
+    });
+  });
 });
+

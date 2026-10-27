@@ -1,8 +1,9 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
-import { Logger } from '@nestjs/common';
+import { Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { JobProgressService } from '../../job-progress/services/job-progress.service';
+import { ExamCacheService } from '../../exam-cache/services/exam-cache.service';
 import {
   GeminiTranslationService,
   QuestionBatchItem,
@@ -74,6 +75,7 @@ export class AiTranslationParentProcessor extends WorkerHost {
     private readonly prisma: PrismaService,
     private readonly jobProgressService: JobProgressService,
     private readonly geminiTranslationService: GeminiTranslationService,
+    @Optional() private readonly examCacheService?: ExamCacheService,
   ) {
     super();
   }
@@ -799,6 +801,22 @@ export class AiTranslationParentProcessor extends WorkerHost {
     });
 
     if (finalJobStatus === 'COMPLETED' || finalJobStatus === 'PARTIALLY_COMPLETED') {
+      if (this.examCacheService) {
+        try {
+          await this.examCacheService.invalidateExamCache(
+            examId,
+            job.examVersionId || undefined,
+          );
+          this.logger.log(
+            `[ExamCache] Invalidation triggered for exam ${examId} (version: ${job.examVersionId || 'all'}) following translation ${finalJobStatus}.`,
+          );
+        } catch (err: any) {
+          this.logger.warn(
+            `Failed to invalidate exam cache for exam ${examId}: ${err?.message}`,
+          );
+        }
+      }
+
       await this.jobProgressService.publishCompleted(
         AI_TRANSLATION_QUEUE,
         jobId,

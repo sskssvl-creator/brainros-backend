@@ -288,6 +288,12 @@ export class TwilioOtpService {
         );
       }
 
+      if (errorCode === 21608) {
+        throw new BadRequestException(
+          'During Twilio trial, SMS can only be sent to verified phone numbers in Twilio Console (or set BYPASS_OTP=true for dev testing).',
+        );
+      }
+
       if (errorCode === 60203 || errorCode === 60212 || errorCode === 20429) {
         throw new BadRequestException(
           'Too many verification attempts. Please wait a few minutes before trying again.',

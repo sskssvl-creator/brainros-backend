@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule } from '@nestjs/config';
 import { RedisModule } from '../redis/redis.module';
+import { ExamCacheModule } from '../exam-cache/exam-cache.module';
 import {
   AI_TRANSLATION_QUEUE,
   AI_TRANSLATION_LANGUAGE_QUEUE,
@@ -19,6 +20,7 @@ import { GeminiRateLimiterService } from './services/gemini-rate-limiter.service
   imports: [
     ConfigModule,
     RedisModule,
+    ExamCacheModule,
     BullModule.registerQueue(
       {
         name: AI_TRANSLATION_QUEUE,

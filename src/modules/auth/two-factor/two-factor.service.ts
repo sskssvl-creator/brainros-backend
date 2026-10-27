@@ -1,9 +1,7 @@
-import { Injectable, BadRequestException, Logger, Optional } from '@nestjs/common';
+import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { RedisService } from '../../redis/redis.service';
 import { SecurityEventService } from '../services/security-event.service';
 import { TwoFactorConfig } from '../config/two-factor.config';
-import { TwoFactorDotInProvider } from './two-factor-dot-in.provider';
-import { TwoFactorProvider } from '../otp/two-factor.provider';
 import { DevelopmentOtpProvider } from './development-otp.provider';
 import { TwilioVerifyProvider } from './twilio-verify.provider';
 import {
@@ -20,62 +18,20 @@ export class TwoFactorService {
     private readonly config: TwoFactorConfig,
     private readonly redisService: RedisService,
     private readonly securityEventService: SecurityEventService,
-    private readonly twoFactorDotInProvider: TwoFactorDotInProvider,
-    private readonly msg91Provider: TwoFactorProvider,
+    private readonly twilioVerifyProvider: TwilioVerifyProvider,
     private readonly devProvider: DevelopmentOtpProvider,
-    @Optional()
-    private readonly twilioVerifyProvider?: TwilioVerifyProvider,
   ) {}
 
   /**
-   * Deterministically returns the active 2FA/OTP provider based solely
-   * on server-side ENABLE_2FA and OTP_PROVIDER configurations.
+   * Returns active OTP provider:
+   * - If config.bypassOtp is true  -> DevelopmentOtpProvider (login with 123456, no SMS)
+   * - If config.bypassOtp is false -> TwilioVerifyProvider (real SMS sent via Twilio Verify)
    */
   getActiveProvider(): ITwoFactorProvider {
-    if (this.config.enable2FA) {
-      // Explicit provider selection based on OTP_PROVIDER env var
-      if (
-        this.config.otpProvider === 'TWILIO' &&
-        this.twilioVerifyProvider &&
-        typeof this.twilioVerifyProvider.sendOtp === 'function'
-      ) {
-        return this.twilioVerifyProvider;
-      }
-      if (
-        this.config.otpProvider === '2FACTOR' &&
-        this.twoFactorDotInProvider &&
-        typeof this.twoFactorDotInProvider.sendOtp === 'function'
-      ) {
-        return this.twoFactorDotInProvider;
-      }
-      if (
-        this.config.otpProvider === 'MSG91' &&
-        this.msg91Provider &&
-        typeof this.msg91Provider.sendOtp === 'function'
-      ) {
-        return this.msg91Provider;
-      }
-      // Fallback chain: Twilio → 2Factor → MSG91
-      if (
-        this.twilioVerifyProvider &&
-        typeof this.twilioVerifyProvider.sendOtp === 'function'
-      ) {
-        return this.twilioVerifyProvider;
-      }
-      if (
-        this.twoFactorDotInProvider &&
-        typeof this.twoFactorDotInProvider.sendOtp === 'function'
-      ) {
-        return this.twoFactorDotInProvider;
-      }
-      if (
-        this.msg91Provider &&
-        typeof this.msg91Provider.sendOtp === 'function'
-      ) {
-        return this.msg91Provider;
-      }
+    if (this.config.bypassOtp) {
+      return this.devProvider;
     }
-    return this.devProvider;
+    return this.twilioVerifyProvider;
   }
 
   /**
@@ -400,7 +356,7 @@ export class TwoFactorService {
   }
 
   /**
-   * Resends OTP via active provider (e.g. MSG91 retry / 2Factor retry)
+   * Resends OTP via active provider (e.g. Twilio Verify resend)
    */
   async resendOtp(
     rawMobileNumber: string,
@@ -409,6 +365,9 @@ export class TwoFactorService {
     const mobileNumber = this.normalizeMobileNumber(rawMobileNumber);
     const provider = this.getActiveProvider();
     if (provider.providerName === 'REAL') {
+      if ('resendOtp' in provider && typeof (provider as any).resendOtp === 'function') {
+        return (provider as any).resendOtp(mobileNumber, 'sms');
+      }
       if ('retryOtp' in provider && typeof (provider as any).retryOtp === 'function') {
         return (provider as any).retryOtp(mobileNumber, retryType);
       }

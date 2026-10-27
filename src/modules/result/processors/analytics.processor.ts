@@ -87,6 +87,13 @@ export class AnalyticsProcessor extends WorkerHost {
         this.logger.warn(`Strategy analysis materialization error: ${sErr.message}`);
       }
 
+      // 2b. Pre-generate and cache Gemini AI Analysis for instantaneous report access
+      try {
+        await this.resultService.getFullAnalysis(attemptId);
+      } catch (aiErr: any) {
+        this.logger.warn(`AI Analysis pre-generation warning: ${aiErr.message}`);
+      }
+
       await this.jobProgressService.publishProgress(
         ANALYTICS_QUEUE_NAME,
         jobId,

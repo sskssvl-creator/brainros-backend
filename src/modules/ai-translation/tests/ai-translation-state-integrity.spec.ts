@@ -2,12 +2,14 @@ import { AiTranslationParentProcessor } from '../processors/ai-translation-paren
 import { PrismaService } from '../../prisma/prisma.service';
 import { JobProgressService } from '../../job-progress/services/job-progress.service';
 import { GeminiTranslationService } from '../services/gemini-translation.service';
+import { ExamCacheService } from '../../exam/services/exam-cache.service';
 
 describe('AiTranslation State Integrity & Idempotency', () => {
   let processor: AiTranslationParentProcessor;
   let mockPrisma: any;
   let mockJobProgress: any;
   let mockGeminiService: any;
+  let mockExamCacheService: any;
 
   beforeEach(() => {
     mockPrisma = {
@@ -52,12 +54,18 @@ describe('AiTranslation State Integrity & Idempotency', () => {
 
     mockGeminiService = {
       translateBatch: jest.fn(),
+      translateRichBatch: jest.fn(),
+    };
+
+    mockExamCacheService = {
+      invalidateExamCache: jest.fn().mockResolvedValue(undefined),
     };
 
     processor = new AiTranslationParentProcessor(
       mockPrisma as PrismaService,
       mockJobProgress as JobProgressService,
       mockGeminiService as GeminiTranslationService,
+      mockExamCacheService as ExamCacheService,
     );
   });
 
@@ -85,10 +93,10 @@ describe('AiTranslation State Integrity & Idempotency', () => {
     mockPrisma.examVersionTranslation.findMany.mockResolvedValue([]);
 
     // First batch succeeds, second batch fails with 429 rate limit
-    mockGeminiService.translateBatch
+    mockGeminiService.translateRichBatch
       .mockResolvedValueOnce([
-        { questionNumber: 1, question: 'Q1 Tamil', optionA: '', optionB: '', optionC: '', optionD: '' },
-        { questionNumber: 2, question: 'Q2 Tamil', optionA: '', optionB: '', optionC: '', optionD: '' },
+        { questionNumber: 1, questionSegments: { 'seg-1': 'Q1 Tamil' } },
+        { questionNumber: 2, questionSegments: { 'seg-2': 'Q2 Tamil' } },
       ])
       .mockRejectedValueOnce(new Error('Translation temporarily rate limited'));
 
@@ -138,9 +146,9 @@ describe('AiTranslation State Integrity & Idempotency', () => {
 
     mockPrisma.examVersionTranslation.findMany.mockResolvedValue([]);
 
-    mockGeminiService.translateBatch.mockResolvedValueOnce([
-      { questionNumber: 1, question: 'Q1 Hindi', optionA: '', optionB: '', optionC: '', optionD: '' },
-      { questionNumber: 2, question: 'Q2 Hindi', optionA: '', optionB: '', optionC: '', optionD: '' },
+    mockGeminiService.translateRichBatch.mockResolvedValueOnce([
+      { questionNumber: 1, questionSegments: { 'seg-1': 'Q1 Hindi' } },
+      { questionNumber: 2, questionSegments: { 'seg-2': 'Q2 Hindi' } },
     ]);
 
     await (processor as any).processLanguageTranslation({
@@ -201,8 +209,8 @@ describe('AiTranslation State Integrity & Idempotency', () => {
       batchSize: 2,
     });
 
-    // Gemini translateBatch should NEVER have been called
-    expect(mockGeminiService.translateBatch).not.toHaveBeenCalled();
+    // Gemini translateRichBatch should NEVER have been called
+    expect(mockGeminiService.translateRichBatch).not.toHaveBeenCalled();
 
     const updateCalls = mockPrisma.aiTranslationJob.update.mock.calls;
     const finalUpdate = updateCalls[updateCalls.length - 1][0];
@@ -210,5 +218,29 @@ describe('AiTranslation State Integrity & Idempotency', () => {
 
     expect(finalLangStatus.status).toBe('COMPLETED');
     expect(finalLangStatus.completedQuestions).toBe(2);
+  });
+
+  it('should invalidate Redis exam cache when evaluateJobCompletion finishes with COMPLETED or PARTIALLY_COMPLETED', async () => {
+    const jobId = 'job-cache-invalidation-test';
+    const examId = 'exam-cache-1';
+    const examVersionId = 'ev-cache-1';
+    const userId = 'user-1';
+
+    // Mock completed job
+    mockPrisma.aiTranslationJob.findUnique.mockResolvedValue({
+      id: jobId,
+      examId,
+      examVersionId,
+      languageStatuses: [
+        { languageId: 'lang-1', languageName: 'Hindi', status: 'COMPLETED', completedQuestions: 10, totalQuestions: 10 },
+        { languageId: 'lang-2', languageName: 'Tamil', status: 'COMPLETED', completedQuestions: 10, totalQuestions: 10 },
+      ],
+    });
+
+    await (processor as any).evaluateJobCompletion(jobId, userId, examId);
+
+    // Expect invalidateExamCache to be called with examId and examVersionId
+    expect(mockExamCacheService.invalidateExamCache).toHaveBeenCalledTimes(1);
+    expect(mockExamCacheService.invalidateExamCache).toHaveBeenCalledWith(examId, examVersionId);
   });
 });

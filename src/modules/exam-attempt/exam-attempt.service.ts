@@ -174,6 +174,8 @@ export class ExamAttemptService {
         where: { id: activeAttempt.id },
         data: {
           statusId: inProgressStatus.id,
+          languageId: resolvedLanguage.id,
+          displayLanguageId: resolvedLanguage.id,
           // Refresh schedule / version binding on recovery if exam was re-scheduled
           scheduleId: access.scheduleId ?? activeAttempt.scheduleId,
           examVersionId: access.examVersionId ?? activeAttempt.examVersionId,
@@ -756,6 +758,16 @@ export class ExamAttemptService {
       attemptId: attempt.id,
       examId: attempt.examId,
       status: attempt.status.name,
+      languageId: attempt.languageId,
+      displayLanguageId: attempt.displayLanguageId || attempt.languageId,
+      language: (attempt as any).language
+        ? {
+            id: (attempt as any).language.id,
+            code: (attempt as any).language.code,
+            name: (attempt as any).language.name,
+            nativeName: (attempt as any).language.nativeName,
+          }
+        : null,
       startedAt: attempt.startedAt,
       serverEndTime: attempt.serverEndTime,
       scheduleId: attempt.scheduleId,
@@ -1033,7 +1045,8 @@ export class ExamAttemptService {
             },
           });
 
-          const currentLanguageId = attempt.languageId;
+          const currentLanguageId =
+            attempt.displayLanguageId || attempt.languageId;
           const defaultLangId = snapshot.languages?.find((l) => l.isDefault)?.id;
 
           items = attemptQuestions
@@ -1052,10 +1065,11 @@ export class ExamAttemptService {
               const matchedTranslation =
                 qItem.translations[currentLanguageId] ||
                 qItem.translations[currentLanguageId.toLowerCase()] ||
+                qItem.translations[currentLanguageId.toUpperCase()] ||
                 (defaultLangId ? qItem.translations[defaultLangId] : null) ||
                 Object.values(qItem.translations)[0];
 
-              const orderedOptions = aq.options
+              let orderedOptions = aq.options
                 .map((aqo) => {
                   const optItem = qItem.optionsById[aqo.examQuestionOptionId];
                   if (!optItem) return null;
@@ -1063,6 +1077,7 @@ export class ExamAttemptService {
                   const optTrans =
                     optItem.translations?.[currentLanguageId] ||
                     optItem.translations?.[currentLanguageId.toLowerCase()] ||
+                    optItem.translations?.[currentLanguageId.toUpperCase()] ||
                     (defaultLangId ? optItem.translations?.[defaultLangId] : null);
 
                   const matchedOptText =
@@ -1088,6 +1103,27 @@ export class ExamAttemptService {
                   };
                 })
                 .filter(Boolean);
+
+              // Strict Question-Option linking fallback: if personalized mapping is empty but question has options, map question's own options
+              if (orderedOptions.length === 0 && qItem.options && qItem.options.length > 0) {
+                orderedOptions = qItem.options.map((optItem: any, optIdx: number) => {
+                  const optTrans =
+                    optItem.translations?.[currentLanguageId] ||
+                    optItem.translations?.[currentLanguageId.toLowerCase()] ||
+                    optItem.translations?.[currentLanguageId.toUpperCase()] ||
+                    (defaultLangId ? optItem.translations?.[defaultLangId] : null);
+                  return {
+                    id: optItem.id,
+                    attemptQuestionOptionId: optItem.id,
+                    displayOrder: optIdx + 1,
+                    optionKey: optItem.optionKey,
+                    optionLabel: optItem.optionLabel || optItem.optionKey || '',
+                    optionText: optTrans?.optionText || optItem.optionText || optItem.optionLabel || '',
+                    optionContent: optTrans?.optionContent || optItem.optionContent || null,
+                    translations: optItem.translations || {},
+                  };
+                });
+              }
 
               return {
                 attemptQuestionId: aq.id,
@@ -1174,7 +1210,8 @@ export class ExamAttemptService {
       const examDefaultLanguageId = examLanguages.find(
         (el) => el.isDefault,
       )?.languageId;
-      const currentLanguageId = attempt.languageId;
+      const currentLanguageId =
+        attempt.displayLanguageId || attempt.languageId;
 
       items = attemptQuestions.map((aq) => {
         const eq = aq.examQuestion;
@@ -1189,7 +1226,7 @@ export class ExamAttemptService {
           q.translations.find(
             (t) =>
               t.languageId === currentLanguageId ||
-              t.language?.code === currentLanguageId,
+              t.language?.code?.toLowerCase() === currentLanguageId.toLowerCase(),
           ) ||
           (examDefaultLanguageId
             ? q.translations.find((t) => t.languageId === examDefaultLanguageId)
@@ -1232,7 +1269,7 @@ export class ExamAttemptService {
         const rawOptionsMap = new Map<string, any>(
           q.options.map((o) => [o.id, o]),
         );
-        const orderedOptions = aq.options
+        let orderedOptions = aq.options
           .map((aqo) => {
             const rawOpt = rawOptionsMap.get(aqo.examQuestionOptionId);
             if (!rawOpt) return null;
@@ -1241,7 +1278,7 @@ export class ExamAttemptService {
               rawOpt.translations?.find(
                 (ot: any) =>
                   ot.languageId === currentLanguageId ||
-                  ot.language?.code === currentLanguageId,
+                  ot.language?.code?.toLowerCase() === currentLanguageId.toLowerCase(),
               ) ||
               (examDefaultLanguageId
                 ? rawOpt.translations?.find(
@@ -1285,6 +1322,58 @@ export class ExamAttemptService {
             };
           })
           .filter(Boolean);
+
+        // Strict Question-Option linking fallback: if personalized mapping is empty but question has options, map question's own options
+        if (orderedOptions.length === 0 && q.options && q.options.length > 0) {
+          orderedOptions = q.options.map((rawOpt: any, optIdx: number) => {
+            const matchedOptTranslation =
+              rawOpt.translations?.find(
+                (ot: any) =>
+                  ot.languageId === currentLanguageId ||
+                  ot.language?.code?.toLowerCase() === currentLanguageId.toLowerCase(),
+              ) ||
+              (examDefaultLanguageId
+                ? rawOpt.translations?.find(
+                    (ot: any) => ot.languageId === examDefaultLanguageId,
+                  )
+                : null) ||
+              rawOpt.translations?.find(
+                (ot: any) => ot.languageId === q.defaultLanguageId,
+              ) ||
+              rawOpt.translations?.[0];
+
+            const optTranslationsMap: Record<string, { optionText: string; optionContent?: any }> = {};
+            (rawOpt.translations || []).forEach((ot: any) => {
+              const optTransObj = {
+                optionText:
+                  ot.optionText || rawOpt.optionText || rawOpt.optionLabel || '',
+                optionContent: ot.optionContent || (rawOpt as any).optionContent || null,
+              };
+              optTranslationsMap[ot.languageId] = optTransObj;
+              if (ot.language?.code) {
+                optTranslationsMap[ot.language.code.toLowerCase()] = optTransObj;
+              }
+            });
+
+            return {
+              id: rawOpt.id,
+              attemptQuestionOptionId: rawOpt.id,
+              displayOrder: optIdx + 1,
+              optionKey: rawOpt.optionKey,
+              optionLabel: rawOpt.optionLabel || rawOpt.optionKey || '',
+              optionText:
+                matchedOptTranslation?.optionText ||
+                rawOpt.optionText ||
+                rawOpt.optionLabel ||
+                '',
+              optionContent:
+                (matchedOptTranslation as any)?.optionContent ||
+                (rawOpt as any).optionContent ||
+                null,
+              translations: optTranslationsMap,
+            };
+          });
+        }
 
         return {
           attemptQuestionId: aq.id,
@@ -1511,6 +1600,7 @@ export class ExamAttemptService {
       where: { id: attemptId },
       include: {
         status: true,
+        language: true,
         student: { select: { id: true, userId: true } },
       },
     });

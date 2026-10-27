@@ -3,7 +3,7 @@ import { BadRequestException, InternalServerErrorException, NotFoundException } 
 import { AuthService } from '../auth.service';
 import { TwoFactorService } from './two-factor.service';
 import { TwoFactorConfig } from '../config/two-factor.config';
-import { TwoFactorDotInProvider } from './two-factor-dot-in.provider';
+import { TwilioVerifyProvider } from './twilio-verify.provider';
 import { DevelopmentOtpProvider } from './development-otp.provider';
 import { OtpService } from '../services/otp.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -19,7 +19,7 @@ describe('2FA Integration & End-to-End Authentication Flows', () => {
   let twoFactorService: TwoFactorService;
   let redisStorage: Map<string, string>;
   let redisServiceMock: any;
-  let twoFactorDotInProviderMock: any;
+  let twilioVerifyProviderMock: any;
   let realProviderMock: any;
   let devProviderMock: any;
   let prismaMock: any;
@@ -40,7 +40,7 @@ describe('2FA Integration & End-to-End Authentication Flows', () => {
     },
   };
 
-  const setupTestModule = async (enable2FA: boolean) => {
+  const setupTestModule = async (bypassOtp: boolean) => {
     redisStorage = new Map<string, string>();
 
     redisServiceMock = {
@@ -53,13 +53,13 @@ describe('2FA Integration & End-to-End Authentication Flows', () => {
       }),
     };
 
-    twoFactorDotInProviderMock = {
+    twilioVerifyProviderMock = {
       sendOtp: jest.fn().mockResolvedValue({ sessionId: 'session123', providerManaged: true }),
       verifyOtp: jest.fn().mockResolvedValue(true),
       retryOtp: jest.fn().mockResolvedValue(true),
       providerName: 'REAL',
     };
-    realProviderMock = twoFactorDotInProviderMock;
+    realProviderMock = twilioVerifyProviderMock;
 
     devProviderMock = {
       providerName: 'DEVELOPMENT',
@@ -69,14 +69,13 @@ describe('2FA Integration & End-to-End Authentication Flows', () => {
         otpHash: 'mock-dev-hash',
       }),
       verifyOtp: jest.fn((dest: string, code: string) => {
-        return Promise.resolve(code === '12345');
+        return Promise.resolve(code === '12345' || code === '123456');
       }),
     };
 
     const configServiceMock = {
       get: jest.fn((key: string) => {
-        if (key === 'ENABLE_2FA') return enable2FA ? 'true' : 'false';
-        if (key === 'OTP_PROVIDER') return '2FACTOR';
+        if (key === 'BYPASS_OTP') return bypassOtp ? 'true' : 'false';
         if (key === 'DEV_BYPASS_OTP') return '12345';
         if (key === 'OTP_MAX_VERIFY_ATTEMPTS') return '5';
         if (key === 'OTP_RESEND_COOLDOWN_SECONDS') return '60';
@@ -91,10 +90,8 @@ describe('2FA Integration & End-to-End Authentication Flows', () => {
       twoFactorConfig,
       redisServiceMock as RedisService,
       { log: jest.fn().mockResolvedValue(undefined) } as any,
-      twoFactorDotInProviderMock as TwoFactorDotInProvider,
-      twoFactorDotInProviderMock as any,
+      twilioVerifyProviderMock as TwilioVerifyProvider,
       devProviderMock as DevelopmentOtpProvider,
-      twoFactorDotInProviderMock as any,
     );
 
     const otpService = new OtpService(
@@ -234,9 +231,9 @@ describe('2FA Integration & End-to-End Authentication Flows', () => {
       examTargetId: 'exam-board',
     };
 
-    describe('When ENABLE_2FA=false (Development Mode)', () => {
+    describe('When BYPASS_OTP=true (Development Mode)', () => {
       beforeEach(async () => {
-        await setupTestModule(false);
+        await setupTestModule(true);
       });
 
       it('should initiate registration, NOT call real provider, and accept 12345', async () => {
@@ -272,9 +269,9 @@ describe('2FA Integration & End-to-End Authentication Flows', () => {
       });
     });
 
-    describe('When ENABLE_2FA=true (Real Production Mode)', () => {
+    describe('When BYPASS_OTP=false (Real Production Mode)', () => {
       beforeEach(async () => {
-        await setupTestModule(true);
+        await setupTestModule(false);
       });
 
       it('should initiate registration via Real Provider and NEVER accept 12345', async () => {
@@ -338,9 +335,9 @@ describe('2FA Integration & End-to-End Authentication Flows', () => {
   // 2. PASSWORDLESS LOGIN FLOWS (Mobile, Email, Student ID)
   // ═══════════════════════════════════════════════════════════════
   describe('Passwordless Login Flow (Mobile, Email, Student ID)', () => {
-    describe('When ENABLE_2FA=false (Development Mode)', () => {
+    describe('When BYPASS_OTP=true (Development Mode)', () => {
       beforeEach(async () => {
-        await setupTestModule(false);
+        await setupTestModule(true);
       });
 
       it('Mobile identifier login should request OTP and verify with 12345', async () => {
@@ -385,9 +382,9 @@ describe('2FA Integration & End-to-End Authentication Flows', () => {
       });
     });
 
-    describe('When ENABLE_2FA=true (Real Production Mode)', () => {
+    describe('When BYPASS_OTP=false (Real Production Mode)', () => {
       beforeEach(async () => {
-        await setupTestModule(true);
+        await setupTestModule(false);
       });
 
       it('Login OTP request should call Real Provider and reject 12345', async () => {

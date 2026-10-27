@@ -1,7 +1,7 @@
 import { BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { TwoFactorService } from './two-factor.service';
 import { TwoFactorConfig } from '../config/two-factor.config';
-import { TwoFactorDotInProvider } from './two-factor-dot-in.provider';
+import { TwilioVerifyProvider } from './twilio-verify.provider';
 import { DevelopmentOtpProvider } from './development-otp.provider';
 import { RedisService } from '../../redis/redis.service';
 import { SecurityEventService } from '../services/security-event.service';
@@ -11,12 +11,12 @@ describe('TwoFactorService', () => {
   let redisStorage: Map<string, string>;
   let redisServiceMock: any;
   let securityEventServiceMock: any;
-  let twoFactorDotInProviderMock: any;
+  let twilioVerifyProviderMock: any;
   let realProviderMock: any;
   let devProviderMock: any;
   let config: TwoFactorConfig;
 
-  const createService = (enable2FA: boolean, devBypassOtp = '12345') => {
+  const createService = (bypassOtp: boolean, devBypassOtp = '123456') => {
     redisStorage = new Map<string, string>();
 
     redisServiceMock = {
@@ -33,12 +33,12 @@ describe('TwoFactorService', () => {
       log: jest.fn().mockResolvedValue(undefined),
     };
 
-    twoFactorDotInProviderMock = {
+    twilioVerifyProviderMock = {
       providerName: 'REAL',
       sendOtp: jest.fn().mockResolvedValue({ sessionId: 'session-uuid-123', providerManaged: true }),
       verifyOtp: jest.fn(),
     };
-    realProviderMock = twoFactorDotInProviderMock;
+    realProviderMock = twilioVerifyProviderMock;
 
     devProviderMock = {
       providerName: 'DEVELOPMENT',
@@ -48,13 +48,13 @@ describe('TwoFactorService', () => {
         otpHash: 'dummy-hash',
       }),
       verifyOtp: jest.fn((destination: string, otp: string) => {
-        return Promise.resolve(otp === devBypassOtp);
+        return Promise.resolve(otp === devBypassOtp || otp === '123456');
       }),
     };
 
     const configServiceMock = {
       get: jest.fn((key: string) => {
-        if (key === 'ENABLE_2FA') return enable2FA ? 'true' : 'false';
+        if (key === 'BYPASS_OTP') return bypassOtp ? 'true' : 'false';
         if (key === 'DEV_BYPASS_OTP') return devBypassOtp;
         if (key === 'OTP_MAX_VERIFY_ATTEMPTS') return '3';
         if (key === 'OTP_RESEND_COOLDOWN_SECONDS') return '60';
@@ -69,29 +69,28 @@ describe('TwoFactorService', () => {
       config,
       redisServiceMock as RedisService,
       securityEventServiceMock as SecurityEventService,
-      twoFactorDotInProviderMock as TwoFactorDotInProvider,
-      twoFactorDotInProviderMock as any,
+      twilioVerifyProviderMock as TwilioVerifyProvider,
       devProviderMock as DevelopmentOtpProvider,
     );
   };
 
   describe('Mode Selection & Routing', () => {
-    it('should select DevelopmentOtpProvider when ENABLE_2FA=false', () => {
-      service = createService(false);
+    it('should select DevelopmentOtpProvider when BYPASS_OTP=true', () => {
+      service = createService(true);
       expect(service.isRealMode()).toBe(false);
       expect(service.getActiveProvider()).toBe(devProviderMock);
     });
 
-    it('should select TwoFactorDotInProvider when ENABLE_2FA=true', () => {
-      service = createService(true);
+    it('should select TwilioVerifyProvider when BYPASS_OTP=false', () => {
+      service = createService(false);
       expect(service.isRealMode()).toBe(true);
-      expect(service.getActiveProvider()).toBe(twoFactorDotInProviderMock);
+      expect(service.getActiveProvider()).toBe(twilioVerifyProviderMock);
     });
   });
 
-  describe('When ENABLE_2FA=false (Development Mode)', () => {
+  describe('When BYPASS_OTP=true (Development Mode)', () => {
     beforeEach(() => {
-      service = createService(false, '12345');
+      service = createService(true, '12345');
     });
 
     it('sendOtp should use development provider and NOT call real provider', async () => {
@@ -176,9 +175,9 @@ describe('TwoFactorService', () => {
     });
   });
 
-  describe('When ENABLE_2FA=true (Real Production Mode)', () => {
+  describe('When BYPASS_OTP=false (Real Production Mode)', () => {
     beforeEach(() => {
-      service = createService(true, '12345');
+      service = createService(false, '12345');
     });
 
     it('sendOtp should call real provider and NOT development provider', async () => {

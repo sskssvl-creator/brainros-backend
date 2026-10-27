@@ -40,15 +40,18 @@ export function parseSafeBoolean(
 export class TwoFactorConfig {
   private readonly logger = new Logger(TwoFactorConfig.name);
 
+  readonly bypassOtp: boolean;
   readonly enable2FA: boolean;
-  readonly otpProvider: 'TWILIO' | '2FACTOR' | 'MSG91';
-  readonly twilioAccountSid: string;
-  readonly twilioAuthToken: string;
-  readonly twilioVerifyServiceSid: string;
-  readonly twoFactorApiKey: string;
-  readonly twoFactorTemplateName: string;
   readonly devBypassOtp: string;
 
+  // Twilio Verify Credentials
+  readonly twilioAccountSid: string;
+  readonly twilioAuthToken: string;
+  readonly twilioApiKey: string;
+  readonly twilioApiSecret: string;
+  readonly twilioVerifyServiceSid: string;
+
+  // OTP limits
   readonly otpTtl: number;
   readonly resendCooldown: number;
   readonly maxAttempts: number;
@@ -56,15 +59,30 @@ export class TwoFactorConfig {
   readonly maxRequestsPerHour: number;
 
   constructor(private readonly configService: ConfigService) {
-    const rawEnable =
-      this.configService.get<string | boolean>('ENABLE_REAL_OTP') ??
-      this.configService.get<string | boolean>('ENABLE_2FA') ??
-      this.configService.get<string | boolean>('ENABLE_OTP') ??
-      process.env.ENABLE_REAL_OTP ??
-      process.env.ENABLE_2FA ??
-      process.env.ENABLE_OTP;
+    const rawBypass =
+      this.configService.get<string | boolean>('BYPASS_OTP') ??
+      process.env.BYPASS_OTP;
 
-    this.enable2FA = parseSafeBoolean(rawEnable, 'ENABLE_REAL_OTP', false);
+    if (rawBypass !== undefined && rawBypass !== null && rawBypass !== '') {
+      this.bypassOtp = parseSafeBoolean(rawBypass, 'BYPASS_OTP', false);
+    } else {
+      // Graceful fallback for legacy flags
+      const rawEnable =
+        this.configService.get<string | boolean>('ENABLE_OTP') ??
+        this.configService.get<string | boolean>('ENABLE_REAL_OTP') ??
+        this.configService.get<string | boolean>('ENABLE_2FA') ??
+        process.env.ENABLE_OTP ??
+        process.env.ENABLE_REAL_OTP ??
+        process.env.ENABLE_2FA;
+
+      if (rawEnable !== undefined && rawEnable !== null && rawEnable !== '') {
+        this.bypassOtp = !parseSafeBoolean(rawEnable, 'ENABLE_OTP', false);
+      } else {
+        this.bypassOtp = true;
+      }
+    }
+
+    this.enable2FA = !this.bypassOtp;
 
     // Twilio Verify Credentials
     this.twilioAccountSid = (
@@ -79,54 +97,37 @@ export class TwoFactorConfig {
       ''
     ).trim();
 
+    this.twilioApiKey = (
+      this.configService.get<string>('TWILIO_API_KEY') ??
+      process.env.TWILIO_API_KEY ??
+      ''
+    ).trim();
+
+    this.twilioApiSecret = (
+      this.configService.get<string>('TWILIO_API_SECRET') ??
+      process.env.TWILIO_API_SECRET ??
+      ''
+    ).trim();
+
     this.twilioVerifyServiceSid = (
       this.configService.get<string>('TWILIO_VERIFY_SERVICE_SID') ??
       process.env.TWILIO_VERIFY_SERVICE_SID ??
       ''
     ).trim();
 
-    const rawProvider = String(
-      this.configService.get<string>('OTP_PROVIDER') ||
-      process.env.OTP_PROVIDER ||
-      (this.twilioAccountSid && this.twilioVerifyServiceSid ? 'TWILIO' : 'TWILIO'),
-    )
-      .trim()
-      .toUpperCase();
-
-    this.otpProvider =
-      rawProvider === '2FACTOR'
-        ? '2FACTOR'
-        : rawProvider === 'MSG91'
-          ? 'MSG91'
-          : 'TWILIO';
-
-    // 2Factor.in API Key
-    this.twoFactorApiKey =
-      this.configService.get<string>('TWO_FACTOR_API_KEY') ??
-      this.configService.get<string>('TWOFACTOR_API_KEY') ??
-      process.env.TWO_FACTOR_API_KEY ??
-      process.env.TWOFACTOR_API_KEY ??
-      '';
-
-    if (this.enable2FA && this.otpProvider === 'TWILIO' && (!this.twilioAccountSid || !this.twilioVerifyServiceSid)) {
+    if (!this.bypassOtp && (!this.twilioAccountSid || !this.twilioVerifyServiceSid)) {
       this.logger.warn(
-        '[SECURITY] ENABLE_REAL_OTP is true and OTP_PROVIDER is TWILIO, but TWILIO_ACCOUNT_SID or TWILIO_VERIFY_SERVICE_SID is missing.',
+        '[SECURITY] BYPASS_OTP is false (Twilio Verify active), but TWILIO_ACCOUNT_SID or TWILIO_VERIFY_SERVICE_SID is missing in .env.',
       );
     }
 
-    this.twoFactorTemplateName =
-      this.configService.get<string>('TWO_FACTOR_TEMPLATE_NAME') ??
-      process.env.TWO_FACTOR_TEMPLATE_NAME ??
-      '';
-
-    // Development bypass OTP code (default: 12345)
-    // Only used when enable2FA === false. Strictly ignored when enable2FA === true.
+    // Development bypass OTP code (default: 123456)
     this.devBypassOtp =
       this.configService.get<string>('DEV_BYPASS_OTP') ??
       this.configService.get<string>('DEV_OTP_CODE') ??
       process.env.DEV_BYPASS_OTP ??
       process.env.DEV_OTP_CODE ??
-      '12345';
+      '123456';
 
     const rawTtl =
       this.configService.get('OTP_TTL_SECONDS') ?? process.env.OTP_TTL_SECONDS;
@@ -167,7 +168,7 @@ export class TwoFactorConfig {
         : 5;
 
     this.logger.log(
-      `TwoFactorConfig initialized: [ENABLE_REAL_OTP = ${this.enable2FA ? 'TRUE (Active Gateway: ' + this.otpProvider + ')' : 'FALSE (Development Bypass: ' + this.devBypassOtp + ')'}]`,
+      `TwoFactorConfig initialized: [MODE = ${this.bypassOtp ? 'DEVELOPMENT BYPASS (Code: ' + this.devBypassOtp + ')' : 'PRODUCTION REAL (Gateway: Twilio Verify)'}]`,
     );
   }
 }

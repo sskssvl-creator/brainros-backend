@@ -12,9 +12,7 @@ import { SecurityEventService } from './services/security-event.service';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { JwtStrategy } from './strategies/jwt.strategy';
-import { TwoFactorProvider } from './otp/two-factor.provider';
 
-import { TwoFactorDotInProvider } from './two-factor/two-factor-dot-in.provider';
 import { DevelopmentOtpProvider } from './two-factor/development-otp.provider';
 import { TwilioOtpService } from './two-factor/twilio-otp.service';
 import { TwilioVerifyProvider } from './two-factor/twilio-verify.provider';
@@ -41,7 +39,6 @@ import { PaymentWebhookController } from './controllers/payment-webhook.controll
     TwoFactorConfig,
     TwilioOtpService,
     TwilioVerifyProvider,
-    TwoFactorDotInProvider,
     DevelopmentOtpProvider,
     TwoFactorService,
     OtpService,
@@ -52,7 +49,6 @@ import { PaymentWebhookController } from './controllers/payment-webhook.controll
     OAuthService,
     SecurityEventService,
     JwtStrategy,
-    TwoFactorProvider,
   ],
   exports: [
     AuthService,
@@ -66,7 +62,6 @@ import { PaymentWebhookController } from './controllers/payment-webhook.controll
     TwilioVerifyProvider,
     TwoFactorService,
     OtpService,
-    TwoFactorDotInProvider,
   ],
 })
 export class AuthModule {}

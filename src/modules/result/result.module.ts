@@ -33,6 +33,7 @@ import { ExamWindowEndProcessor } from './processors/exam-window-end.processor';
 import { ResultProcessingMonitorService } from './services/result-processing-monitor.service';
 import { ExamReportPdfService } from '../admin/services/exam-report-pdf.service';
 import { ResendEmailService } from '../admin/services/resend-email.service';
+import { GeminiExamAnalysisService } from './services/gemini-exam-analysis.service';
 
 @Module({
   imports: [
@@ -58,6 +59,7 @@ import { ResendEmailService } from '../admin/services/resend-email.service';
   providers: [
     ResultService,
     AnalysisEngineService,
+    GeminiExamAnalysisService,
     ResultReadinessService,
     ResultAccessService,
     ExamPublicationService,
@@ -73,6 +75,7 @@ import { ResendEmailService } from '../admin/services/resend-email.service';
   exports: [
     ResultService,
     AnalysisEngineService,
+    GeminiExamAnalysisService,
     ResultReadinessService,
     ResultAccessService,
     ExamPublicationService,

@@ -339,6 +339,18 @@ export interface BrainrosPerformanceIndexSection {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// AI ANALYSIS METADATA
+// ═══════════════════════════════════════════════════════════════════
+
+export interface AiAnalysisMetadata {
+  isAiGenerated: boolean;
+  provider: 'gemini' | 'heuristic_fallback';
+  model?: string;
+  generatedAt: string;
+  confidenceScore?: number;
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // COMPLETE MASTER REPORT INTERFACE
 // ═══════════════════════════════════════════════════════════════════
 
@@ -367,6 +379,9 @@ export interface FullAnalysisReport {
   attemptStrategy: AttemptStrategyReport;
   recommendations: ActionableRecommendation[];
 
+  // AI Generation & Diagnostic Metadata
+  aiMetadata?: AiAnalysisMetadata;
+
   // 14 Canonical Sections (Matching Reference Design)
   section1StudentDetails: StudentDetailsSection;
   section2OverallPerformance: OverallPerformanceSection;
@@ -384,18 +399,18 @@ export interface FullAnalysisReport {
   section14PerformanceIndex: BrainrosPerformanceIndexSection;
 
   // Canonical Direct Aliases
-  studentDetails?: StudentDetailsSection;
-  overallPerformance?: OverallPerformanceSection;
-  subjectWiseAnalysis?: SubjectWiseAnalysisSection;
-  subjectPerformance?: SubjectPerformanceItem[];
-  topicWisePerformance?: TopicPerformanceRow[];
-  strengthWeaknessAnalysis?: StrengthWeaknessSection;
-  errorAnalysis?: ErrorAnalysisSection;
-  timeManagement?: TimeManagementSection;
-  performanceTrend?: PerformanceTrendSection;
-  expectedPerformance?: ExpectedPerformanceSection;
-  improvementPlan?: FourteenDayImprovementPlanSection;
-  actionChecklist?: PersonalizedActionChecklistSection;
-  parentSummary?: ParentSummarySection;
-  performanceIndex?: BrainrosPerformanceIndexSection;
+  studentDetails: StudentDetailsSection;
+  overallPerformance: OverallPerformanceSection;
+  subjectWiseAnalysis: SubjectWiseAnalysisSection;
+  subjectPerformance: SubjectPerformanceItem[];
+  topicWisePerformance: TopicPerformanceRow[];
+  strengthWeaknessAnalysis: StrengthWeaknessSection;
+  errorAnalysis: ErrorAnalysisSection;
+  timeManagement: TimeManagementSection;
+  performanceTrend: PerformanceTrendSection;
+  expectedPerformance: ExpectedPerformanceSection;
+  improvementPlan: FourteenDayImprovementPlanSection;
+  actionChecklist: PersonalizedActionChecklistSection;
+  parentSummary: ParentSummarySection;
+  performanceIndex: BrainrosPerformanceIndexSection;
 }
