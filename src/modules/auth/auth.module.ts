@@ -14,8 +14,8 @@ import { PassportModule } from '@nestjs/passport';
 import { JwtStrategy } from './strategies/jwt.strategy';
 
 import { DevelopmentOtpProvider } from './two-factor/development-otp.provider';
-import { TwilioOtpService } from './two-factor/twilio-otp.service';
-import { TwilioVerifyProvider } from './two-factor/twilio-verify.provider';
+import { Msg91OtpService } from './two-factor/msg91-otp.service';
+import { Msg91OtpProvider } from './two-factor/msg91-otp.provider';
 import { TwoFactorService } from './two-factor/two-factor.service';
 import { TwoFactorConfig } from './config/two-factor.config';
 import { RedisModule } from '../redis/redis.module';
@@ -37,8 +37,8 @@ import { PaymentWebhookController } from './controllers/payment-webhook.controll
 
   providers: [
     TwoFactorConfig,
-    TwilioOtpService,
-    TwilioVerifyProvider,
+    Msg91OtpService,
+    Msg91OtpProvider,
     DevelopmentOtpProvider,
     TwoFactorService,
     OtpService,
@@ -58,8 +58,8 @@ import { PaymentWebhookController } from './controllers/payment-webhook.controll
     SessionService,
     TokenService,
     TwoFactorConfig,
-    TwilioOtpService,
-    TwilioVerifyProvider,
+    Msg91OtpService,
+    Msg91OtpProvider,
     TwoFactorService,
     OtpService,
   ],

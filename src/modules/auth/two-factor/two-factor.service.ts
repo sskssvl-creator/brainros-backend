@@ -3,7 +3,7 @@ import { RedisService } from '../../redis/redis.service';
 import { SecurityEventService } from '../services/security-event.service';
 import { TwoFactorConfig } from '../config/two-factor.config';
 import { DevelopmentOtpProvider } from './development-otp.provider';
-import { TwilioVerifyProvider } from './twilio-verify.provider';
+import { Msg91OtpProvider } from './msg91-otp.provider';
 import {
   ITwoFactorProvider,
   OtpPurpose,
@@ -18,20 +18,20 @@ export class TwoFactorService {
     private readonly config: TwoFactorConfig,
     private readonly redisService: RedisService,
     private readonly securityEventService: SecurityEventService,
-    private readonly twilioVerifyProvider: TwilioVerifyProvider,
+    private readonly msg91OtpProvider: Msg91OtpProvider,
     private readonly devProvider: DevelopmentOtpProvider,
   ) {}
 
   /**
    * Returns active OTP provider:
    * - If config.bypassOtp is true  -> DevelopmentOtpProvider (login with 123456, no SMS)
-   * - If config.bypassOtp is false -> TwilioVerifyProvider (real SMS sent via Twilio Verify)
+   * - If config.bypassOtp is false -> Msg91OtpProvider (real SMS sent via MSG91)
    */
   getActiveProvider(): ITwoFactorProvider {
     if (this.config.bypassOtp) {
       return this.devProvider;
     }
-    return this.twilioVerifyProvider;
+    return this.msg91OtpProvider;
   }
 
   /**
@@ -39,6 +39,29 @@ export class TwoFactorService {
    */
   isRealMode(): boolean {
     return this.config.enable2FA;
+  }
+
+  /**
+   * Returns whether OTP is in bypass mode.
+   */
+  isBypassEnabled(): boolean {
+    return this.config.bypassOtp;
+  }
+
+  /**
+   * Returns configured development bypass OTP code.
+   */
+  getDevBypassOtp(): string {
+    return this.config.devBypassOtp || '1234';
+  }
+
+  /**
+   * Returns the expected OTP length.
+   */
+  getOtpLength(): number {
+    return this.config.bypassOtp
+      ? (this.config.devBypassOtp || '1234').length
+      : (this.config.otpLength || 4);
   }
 
   /**

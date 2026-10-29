@@ -1189,6 +1189,10 @@ export class AuthService {
       metadata: { loginRequestId, purpose: 'LOGIN', mobile: targetMobile },
     });
 
+    const isBypass = this.otpService?.isBypassEnabled?.() ?? false;
+    const devOtp = this.otpService?.getDevBypassOtp?.() ?? '1234';
+    const otpLength = this.otpService?.getOtpLength?.() ?? 4;
+
     return {
       message: 'OTP sent to your registered mobile number.',
       data: {
@@ -1198,7 +1202,9 @@ export class AuthService {
         mobileMasked: this.maskMobile(targetMobile),
         expiresIn: 300,
         resendAvailableIn: 60,
-        otpLength: 6,
+        otpLength,
+        bypassOtp: isBypass,
+        devBypassOtp: isBypass ? devOtp : undefined,
       },
     };
   }
@@ -1577,6 +1583,10 @@ export class AuthService {
       metadata: { purpose: 'LOGIN', mobile: targetMobile },
     });
 
+    const isBypass = this.otpService?.isBypassEnabled?.() ?? false;
+    const devOtp = this.otpService?.getDevBypassOtp?.() ?? '1234';
+    const otpLength = this.otpService?.getOtpLength?.() ?? 4;
+
     return {
       message: 'OTP sent to your registered mobile number.',
       data: {
@@ -1586,6 +1596,9 @@ export class AuthService {
         mobileMasked: this.maskMobile(targetMobile),
         expiresIn: 300,
         resendAvailableIn: 60,
+        otpLength,
+        bypassOtp: isBypass,
+        devBypassOtp: isBypass ? devOtp : undefined,
       },
     };
   }
@@ -2250,5 +2263,19 @@ export class AuthService {
       .filter((t): t is { id: string; name: string; description: string | null } => Boolean(t));
 
     return { classes, languages, examTargets, states };
+  }
+
+  /**
+   * Returns current OTP configuration (whether bypass mode is active, dev OTP code, length)
+   */
+  getOtpConfig() {
+    const isBypass = this.otpService?.isBypassEnabled?.() ?? false;
+    const devOtp = this.otpService?.getDevBypassOtp?.() ?? '1234';
+    const otpLength = this.otpService?.getOtpLength?.() ?? 4;
+    return {
+      bypassOtp: isBypass,
+      devBypassOtp: isBypass ? devOtp : undefined,
+      otpLength,
+    };
   }
 }

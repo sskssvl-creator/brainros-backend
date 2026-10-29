@@ -52,6 +52,9 @@ describe('AuthService (Passwordless & OTP Registration)', () => {
       }),
       sendOtp: jest.fn().mockResolvedValue(undefined),
       verifyOtp: jest.fn().mockResolvedValue(true),
+      isBypassEnabled: jest.fn().mockReturnValue(false),
+      getDevBypassOtp: jest.fn().mockReturnValue('1234'),
+      getOtpLength: jest.fn().mockReturnValue(4),
     };
 
     tokenServiceMock = {

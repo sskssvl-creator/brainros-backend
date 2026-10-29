@@ -3,7 +3,7 @@ import { BadRequestException, InternalServerErrorException, NotFoundException } 
 import { AuthService } from '../auth.service';
 import { TwoFactorService } from './two-factor.service';
 import { TwoFactorConfig } from '../config/two-factor.config';
-import { TwilioVerifyProvider } from './twilio-verify.provider';
+import { Msg91OtpProvider } from './msg91-otp.provider';
 import { DevelopmentOtpProvider } from './development-otp.provider';
 import { OtpService } from '../services/otp.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -19,7 +19,7 @@ describe('2FA Integration & End-to-End Authentication Flows', () => {
   let twoFactorService: TwoFactorService;
   let redisStorage: Map<string, string>;
   let redisServiceMock: any;
-  let twilioVerifyProviderMock: any;
+  let msg91OtpProviderMock: any;
   let realProviderMock: any;
   let devProviderMock: any;
   let prismaMock: any;
@@ -53,13 +53,13 @@ describe('2FA Integration & End-to-End Authentication Flows', () => {
       }),
     };
 
-    twilioVerifyProviderMock = {
+    msg91OtpProviderMock = {
       sendOtp: jest.fn().mockResolvedValue({ sessionId: 'session123', providerManaged: true }),
       verifyOtp: jest.fn().mockResolvedValue(true),
       retryOtp: jest.fn().mockResolvedValue(true),
       providerName: 'REAL',
     };
-    realProviderMock = twilioVerifyProviderMock;
+    realProviderMock = msg91OtpProviderMock;
 
     devProviderMock = {
       providerName: 'DEVELOPMENT',
@@ -90,7 +90,7 @@ describe('2FA Integration & End-to-End Authentication Flows', () => {
       twoFactorConfig,
       redisServiceMock as RedisService,
       { log: jest.fn().mockResolvedValue(undefined) } as any,
-      twilioVerifyProviderMock as TwilioVerifyProvider,
+      msg91OtpProviderMock as Msg91OtpProvider,
       devProviderMock as DevelopmentOtpProvider,
     );
 

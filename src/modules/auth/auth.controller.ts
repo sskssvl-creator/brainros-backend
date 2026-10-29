@@ -297,6 +297,19 @@ export class AuthController {
     return this.authService.checkUserExists(identifier);
   }
 
+  /**
+   * Public endpoint to get current OTP configuration (bypass mode, code, length)
+   * GET /auth/otp-config
+   */
+  @Get('otp-config')
+  @HttpCode(HttpStatus.OK)
+  async getOtpConfig() {
+    return {
+      message: 'OTP configuration retrieved successfully',
+      data: this.authService.getOtpConfig(),
+    };
+  }
+
 
   // ═══════════════════════════════════════════════════════════════
   // 5. LEGACY PASSWORD & OAUTH ENDPOINTS

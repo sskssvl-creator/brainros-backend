@@ -44,12 +44,11 @@ export class TwoFactorConfig {
   readonly enable2FA: boolean;
   readonly devBypassOtp: string;
 
-  // Twilio Verify Credentials
-  readonly twilioAccountSid: string;
-  readonly twilioAuthToken: string;
-  readonly twilioApiKey: string;
-  readonly twilioApiSecret: string;
-  readonly twilioVerifyServiceSid: string;
+  // MSG91 Credentials
+  readonly msg91AuthKey: string;
+  readonly msg91TemplateId: string;
+  readonly msg91SenderId: string;
+  readonly msg91VerifyUrl: string;
 
   // OTP limits
   readonly otpTtl: number;
@@ -84,40 +83,34 @@ export class TwoFactorConfig {
 
     this.enable2FA = !this.bypassOtp;
 
-    // Twilio Verify Credentials
-    this.twilioAccountSid = (
-      this.configService.get<string>('TWILIO_ACCOUNT_SID') ??
-      process.env.TWILIO_ACCOUNT_SID ??
+    // MSG91 Credentials
+    this.msg91AuthKey = (
+      this.configService.get<string>('MSG91_AUTH_KEY') ??
+      process.env.MSG91_AUTH_KEY ??
       ''
     ).trim();
 
-    this.twilioAuthToken = (
-      this.configService.get<string>('TWILIO_AUTH_TOKEN') ??
-      process.env.TWILIO_AUTH_TOKEN ??
+    this.msg91TemplateId = (
+      this.configService.get<string>('MSG91_TEMPLATE_ID') ??
+      process.env.MSG91_TEMPLATE_ID ??
       ''
     ).trim();
 
-    this.twilioApiKey = (
-      this.configService.get<string>('TWILIO_API_KEY') ??
-      process.env.TWILIO_API_KEY ??
+    this.msg91SenderId = (
+      this.configService.get<string>('MSG91_SENDER_ID') ??
+      process.env.MSG91_SENDER_ID ??
       ''
     ).trim();
 
-    this.twilioApiSecret = (
-      this.configService.get<string>('TWILIO_API_SECRET') ??
-      process.env.TWILIO_API_SECRET ??
-      ''
+    this.msg91VerifyUrl = (
+      this.configService.get<string>('MSG91_VERIFY_URL') ??
+      process.env.MSG91_VERIFY_URL ??
+      'https://api.msg91.com/api/v5/widget/verifyAccessToken'
     ).trim();
 
-    this.twilioVerifyServiceSid = (
-      this.configService.get<string>('TWILIO_VERIFY_SERVICE_SID') ??
-      process.env.TWILIO_VERIFY_SERVICE_SID ??
-      ''
-    ).trim();
-
-    if (!this.bypassOtp && (!this.twilioAccountSid || !this.twilioVerifyServiceSid)) {
+    if (!this.bypassOtp && !this.msg91AuthKey) {
       this.logger.warn(
-        '[SECURITY] BYPASS_OTP is false (Twilio Verify active), but TWILIO_ACCOUNT_SID or TWILIO_VERIFY_SERVICE_SID is missing in .env.',
+        '[SECURITY] BYPASS_OTP is false (MSG91 active), but MSG91_AUTH_KEY is missing in .env.',
       );
     }
 
@@ -168,7 +161,7 @@ export class TwoFactorConfig {
         : 5;
 
     this.logger.log(
-      `TwoFactorConfig initialized: [MODE = ${this.bypassOtp ? 'DEVELOPMENT BYPASS (Code: ' + this.devBypassOtp + ')' : 'PRODUCTION REAL (Gateway: Twilio Verify)'}]`,
+      `TwoFactorConfig initialized: [MODE = ${this.bypassOtp ? 'DEVELOPMENT BYPASS (Code: ' + this.devBypassOtp + ')' : 'PRODUCTION REAL (Gateway: MSG91)'}]`,
     );
   }
 }

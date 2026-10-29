@@ -1,7 +1,7 @@
 import { BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { TwoFactorService } from './two-factor.service';
 import { TwoFactorConfig } from '../config/two-factor.config';
-import { TwilioVerifyProvider } from './twilio-verify.provider';
+import { Msg91OtpProvider } from './msg91-otp.provider';
 import { DevelopmentOtpProvider } from './development-otp.provider';
 import { RedisService } from '../../redis/redis.service';
 import { SecurityEventService } from '../services/security-event.service';
@@ -11,7 +11,7 @@ describe('TwoFactorService', () => {
   let redisStorage: Map<string, string>;
   let redisServiceMock: any;
   let securityEventServiceMock: any;
-  let twilioVerifyProviderMock: any;
+  let msg91OtpProviderMock: any;
   let realProviderMock: any;
   let devProviderMock: any;
   let config: TwoFactorConfig;
@@ -33,12 +33,12 @@ describe('TwoFactorService', () => {
       log: jest.fn().mockResolvedValue(undefined),
     };
 
-    twilioVerifyProviderMock = {
+    msg91OtpProviderMock = {
       providerName: 'REAL',
       sendOtp: jest.fn().mockResolvedValue({ sessionId: 'session-uuid-123', providerManaged: true }),
       verifyOtp: jest.fn(),
     };
-    realProviderMock = twilioVerifyProviderMock;
+    realProviderMock = msg91OtpProviderMock;
 
     devProviderMock = {
       providerName: 'DEVELOPMENT',
@@ -69,7 +69,7 @@ describe('TwoFactorService', () => {
       config,
       redisServiceMock as RedisService,
       securityEventServiceMock as SecurityEventService,
-      twilioVerifyProviderMock as TwilioVerifyProvider,
+      msg91OtpProviderMock as Msg91OtpProvider,
       devProviderMock as DevelopmentOtpProvider,
     );
   };
@@ -81,10 +81,10 @@ describe('TwoFactorService', () => {
       expect(service.getActiveProvider()).toBe(devProviderMock);
     });
 
-    it('should select TwilioVerifyProvider when BYPASS_OTP=false', () => {
+    it('should select Msg91OtpProvider when BYPASS_OTP=false', () => {
       service = createService(false);
       expect(service.isRealMode()).toBe(true);
-      expect(service.getActiveProvider()).toBe(twilioVerifyProviderMock);
+      expect(service.getActiveProvider()).toBe(msg91OtpProviderMock);
     });
   });
 
