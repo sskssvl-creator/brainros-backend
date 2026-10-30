@@ -36,6 +36,9 @@ export interface SalesVisitRecord {
   locationAddress?: string | null;
   state?: string | null;
   district?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  accuracy?: number | null;
   scheduledAt: string;
   purpose?: string | null;
   notes?: string | null;
@@ -44,6 +47,7 @@ export interface SalesVisitRecord {
   checkInTime?: string | null;
   checkInLat?: number | null;
   checkInLng?: number | null;
+  checkInAccuracy?: number | null;
   checkInAddress?: string | null;
   checkInPhotos?: string[];
   checkOutTime?: string | null;
@@ -121,8 +125,12 @@ export class SalesVisitService {
       outcome: VisitOutcome.INTERESTED,
       checkInTime: now,
       checkOutTime: now,
+      latitude: dto.latitude || null,
+      longitude: dto.longitude || null,
+      accuracy: dto.accuracy || null,
       checkInLat: dto.latitude || null,
       checkInLng: dto.longitude || null,
+      checkInAccuracy: dto.accuracy || null,
       checkOutLat: dto.latitude || null,
       checkOutLng: dto.longitude || null,
       checkInAddress: dto.locationAddress?.trim() || null,
@@ -220,6 +228,10 @@ export class SalesVisitService {
     visit.checkInTime = now;
     visit.checkInLat = dto.latitude;
     visit.checkInLng = dto.longitude;
+    visit.checkInAccuracy = dto.accuracy || null;
+    visit.latitude = dto.latitude;
+    visit.longitude = dto.longitude;
+    visit.accuracy = dto.accuracy || null;
     visit.checkInAddress = dto.locationAddress || visit.locationAddress;
     visit.checkInPhotos = dto.photos || [];
     if (dto.notes) {

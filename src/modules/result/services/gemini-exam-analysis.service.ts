@@ -274,6 +274,11 @@ ${errorSamplesText}
 ### HISTORICAL PERFORMANCE:
 ${previousHistoryText}
 
+### SUBJECT RESTRICTIONS (CRITICAL & STRICT):
+The exam contains ONLY the following subject(s): ${subjects.map(s => s.subjectName).join(', ')}.
+You MUST NOT mention or generate plan blocks for any subjects outside this list (e.g. do not invent Physics, Chemistry, Biology, etc. if not listed above).
+Every block in "fourteenDayPlan" MUST assign "subject" strictly to one of the listed subjects or "All Subjects".
+
 ### OUTPUT REQUIREMENTS:
 Respond ONLY with a valid, parseable JSON object matching this exact schema:
 {
@@ -542,7 +547,7 @@ Respond ONLY with a valid, parseable JSON object matching this exact schema:
         `Potential score without low-confidence negative marking: ${Math.round(
           context.overall.score + context.overall.negativeMarksLost,
         )}/${context.exam.maxScore}.`,
-      fourteenDayPlan: parsed.fourteenDayPlan?.blocks?.length
+      fourteenDayPlan: this.validatePlanSubjects(parsed.fourteenDayPlan, context.subjects)
         ? parsed.fourteenDayPlan
         : this.getHeuristic14DayPlan(context),
       actionChecklist: parsed.actionChecklist?.items?.length
@@ -695,16 +700,112 @@ Respond ONLY with a valid, parseable JSON object matching this exact schema:
   private getHeuristic14DayPlan(
     context: StudentExamAiContext,
   ): FourteenDayImprovementPlanSection {
-    const s1 = context.subjects[0]?.subjectName || 'Physics';
-    const s2 = context.subjects[1]?.subjectName || 'Chemistry';
-    const s3 = context.subjects[2]?.subjectName || 'Biology / Math';
+    const activeSubjects =
+      context.subjects && context.subjects.length > 0
+        ? context.subjects
+        : [{ subjectName: context.exam.title || 'General', accuracy: context.overall.accuracy }];
 
     const weakChaps = context.chapters
       .filter((c) => c.status === 'CRITICAL' || c.accuracy < 60)
       .map((c) => c.chapterName);
 
-    return {
-      blocks: [
+    const initialBlocks: any[] = [];
+
+    if (activeSubjects.length === 1) {
+      const s = activeSubjects[0];
+      const sChaps = context.chapters.filter((c) => c.subjectName === s.subjectName).map((c) => c.chapterName);
+      const chaps1 = sChaps.slice(0, 2).length ? sChaps.slice(0, 2) : ['Core Theoretical Concepts'];
+      const chaps2 = sChaps.slice(2, 4).length ? sChaps.slice(2, 4) : ['Standard Application Practice'];
+      const chaps3 = sChaps.slice(4, 6).length ? sChaps.slice(4, 6) : ['Advanced Numericals & Speed Drilling'];
+
+      initialBlocks.push(
+        {
+          period: 'Days 1–3',
+          title: `${s.subjectName} — Core Theory & Fundamental Derivations`,
+          subject: s.subjectName,
+          focusChapters: chaps1,
+          activities: [
+            'Core formula derivation and concept reinforcement',
+            'Solve 40–60 fundamental questions to lock in core principles',
+            'Review previous mistakes and note key traps',
+          ],
+          practiceVolume: '40–60 questions/day',
+        },
+        {
+          period: 'Days 4–6',
+          title: `${s.subjectName} — Application Drilling & Moderate Problems`,
+          subject: s.subjectName,
+          focusChapters: chaps2,
+          activities: [
+            'Focus on multi-step analytical and standard numerical applications',
+            'Time-restricted chapter-level practice (60–90 seconds per question)',
+            'Resolve all incorrect answers from this mock test systematically',
+          ],
+          practiceVolume: '50–70 questions/day',
+        },
+        {
+          period: 'Days 7–9',
+          title: `${s.subjectName} — Advanced Problem Solving & Speed Precision`,
+          subject: s.subjectName,
+          focusChapters: chaps3,
+          activities: [
+            'High-difficulty previous year questions (PYQs) and challenging formats',
+            'Timed sprint drills under strict 45-minute limits',
+            'Execution of option elimination technique to avoid negative marking',
+          ],
+          practiceVolume: '60–80 questions/day',
+        },
+      );
+    } else if (activeSubjects.length === 2) {
+      const s1 = activeSubjects[0];
+      const s2 = activeSubjects[1];
+      const s1Chaps = context.chapters.filter((c) => c.subjectName === s1.subjectName).map((c) => c.chapterName);
+      const s2Chaps = context.chapters.filter((c) => c.subjectName === s2.subjectName).map((c) => c.chapterName);
+
+      initialBlocks.push(
+        {
+          period: 'Days 1–3',
+          title: `${s1.subjectName} — Priority Remediation & Core Formulas`,
+          subject: s1.subjectName,
+          focusChapters: s1Chaps.slice(0, 3).length ? s1Chaps.slice(0, 3) : ['Priority Conceptual Areas'],
+          activities: [
+            'Core formula derivation and concept reinforcement',
+            'Solve 50–70 standard numerical problems daily',
+            'Log and audit all mistakes in dedicated Error Notebook',
+          ],
+          practiceVolume: '50–70 questions/day',
+        },
+        {
+          period: 'Days 4–6',
+          title: `${s2.subjectName} — High-Yield Revision & Numerical Precision`,
+          subject: s2.subjectName,
+          focusChapters: s2Chaps.slice(0, 3).length ? s2Chaps.slice(0, 3) : ['High-Yield Chapters'],
+          activities: [
+            'High-frequency numerical practice and formula sheet revision',
+            'Focused PYQ solving with strict timer enforcement',
+            'Option elimination drills to eliminate avoidable guesses',
+          ],
+          practiceVolume: '50–70 questions/day',
+        },
+        {
+          period: 'Days 7–9',
+          title: `${s1.subjectName} & ${s2.subjectName} — Cross-Subject Integrated Drills`,
+          subject: `${s1.subjectName} & ${s2.subjectName}`,
+          focusChapters: [...s1Chaps.slice(0, 2), ...s2Chaps.slice(0, 2)],
+          activities: [
+            'Combined two-subject timed drills under 90 minutes',
+            'Speed and accuracy balance check across both subjects',
+            'Comprehensive review of weak questions from Days 1–6',
+          ],
+          practiceVolume: '60–80 questions/day',
+        },
+      );
+    } else {
+      const s1 = activeSubjects[0].subjectName;
+      const s2 = activeSubjects[1].subjectName;
+      const s3 = activeSubjects[2].subjectName;
+
+      initialBlocks.push(
         {
           period: 'Days 1–3',
           title: `${s1} Focus & Numerical Drilling`,
@@ -721,11 +822,11 @@ Respond ONLY with a valid, parseable JSON object matching this exact schema:
           period: 'Days 4–6',
           title: `${s2} High-Yield & Application Drilling`,
           subject: s2,
-          focusChapters: weakChaps.slice(2, 4).length ? weakChaps.slice(2, 4) : ['High-Yield Reactions & Calculations'],
+          focusChapters: weakChaps.slice(2, 4).length ? weakChaps.slice(2, 4) : ['High-Yield Applications & Problem Solving'],
           activities: [
-            'Physical Chemistry calculation drills & formula sheet revision',
-            'NCERT line-by-line reading for Inorganic reactions',
-            'Reaction mechanisms and reagent charts for Organic chemistry',
+            `${s2} high-yield calculation drills & formula sheet revision`,
+            `Standard problem-solving patterns and shortcut methods for ${s2}`,
+            `Focused PYQ practice on moderate-difficulty chapters in ${s2}`,
           ],
           practiceVolume: '60–80 questions/day',
         },
@@ -735,12 +836,18 @@ Respond ONLY with a valid, parseable JSON object matching this exact schema:
           subject: s3,
           focusChapters: weakChaps.slice(4, 6).length ? weakChaps.slice(4, 6) : ['Core Analytical Chapters'],
           activities: [
-            'NCERT diagram review and factual memorization drills',
+            `Comprehensive revision of core formulas and key definitions for ${s3}`,
             'High-frequency PYQ (Previous Year Questions) practice',
             'Timed section drills under 45 minutes',
           ],
           practiceVolume: '70–90 questions/day',
         },
+      );
+    }
+
+    return {
+      blocks: [
+        ...initialBlocks,
         {
           period: 'Days 10–11',
           title: 'Mixed Practice & Error Notebook Remediation',
@@ -943,5 +1050,19 @@ Respond ONLY with a valid, parseable JSON object matching this exact schema:
       topStrengths: strongSubjects.length ? strongSubjects.slice(0, 3) : ['Solid foundational attempt commitment across test duration'],
       priorityWeaknesses: weakSubjects.length ? weakSubjects.slice(0, 3) : ['Time allocation & question scanning speed for complex numericals'],
     };
+  }
+
+  public validatePlanSubjects(plan: any, examSubjects: { subjectName: string }[]): boolean {
+    if (!plan?.blocks || !Array.isArray(plan.blocks) || plan.blocks.length === 0) return false;
+    if (!examSubjects || examSubjects.length === 0) return true;
+    const allowed = new Set(examSubjects.map((s) => (s.subjectName || '').toLowerCase().trim()));
+    allowed.add('all subjects');
+    allowed.add('all');
+    allowed.add('general');
+    return !plan.blocks.some((b: any) => {
+      if (!b.subject) return false;
+      const sub = b.subject.toLowerCase().trim();
+      return ![...allowed].some((a) => a && (sub.includes(a) || a.includes(sub)));
+    });
   }
 }

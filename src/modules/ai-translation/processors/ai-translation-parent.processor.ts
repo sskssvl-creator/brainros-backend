@@ -984,19 +984,61 @@ export class AiTranslationParentProcessor extends WorkerHost {
       }
     }
 
-    // Ensure ExamSection exists
-    let examSection = exam.sections[0] as any;
-    if (!examSection) {
-      examSection = await this.prisma.examSection.create({
-        data: {
-          examId: exam.id,
-          subjectId: defaultSubject.id,
-          name: 'Section A',
-          totalQuestions: questions.length,
-          displayOrder: 1,
-        } as any,
-      });
+    // Map existing sections by subjectId for fast lookup
+    const sectionBySubject = new Map<string, any>();
+    for (const sec of exam.sections || []) {
+      if (sec.subjectId && !sectionBySubject.has(sec.subjectId)) {
+        sectionBySubject.set(sec.subjectId, sec);
+      }
     }
+
+    // Cache subjects and default chapters by subjectId
+    const subjectCache = new Map<string, any>();
+    const chapterCache = new Map<string, any>();
+
+    // Seed default subject & chapter in caches
+    subjectCache.set(defaultSubject.id, defaultSubject);
+    chapterCache.set(defaultSubject.id, defaultChapter);
+
+    const getSubjectAndChapter = async (subjectId?: string) => {
+      const targetSubId = subjectId || defaultSubject.id;
+      let sub = subjectCache.get(targetSubId);
+      if (!sub) {
+        sub = await this.prisma.subject.findUnique({ where: { id: targetSubId } });
+        if (!sub) sub = defaultSubject;
+        subjectCache.set(sub.id, sub);
+      }
+
+      let ch = chapterCache.get(sub.id);
+      if (!ch) {
+        ch = await this.prisma.chapter.findFirst({ where: { subjectId: sub.id } });
+        if (!ch) {
+          ch = await this.prisma.chapter.create({
+            data: { subjectId: sub.id, name: 'General Chapter', code: `${sub.name.slice(0, 3).toUpperCase()}-01` },
+          });
+        }
+        chapterCache.set(sub.id, ch);
+      }
+
+      return { subject: sub, chapter: ch };
+    };
+
+    const getExamSection = async (sub: any) => {
+      let sec = sectionBySubject.get(sub.id);
+      if (!sec) {
+        sec = await this.prisma.examSection.create({
+          data: {
+            examId: exam.id,
+            subjectId: sub.id,
+            name: `${sub.name} Section`,
+            totalQuestions: 0,
+            displayOrder: sectionBySubject.size + 1,
+          } as any,
+        });
+        sectionBySubject.set(sub.id, sec);
+      }
+      return sec;
+    };
 
     const totalQ = questions.length;
     const REPORT_INTERVAL = Math.max(1, Math.ceil(totalQ / 10));
@@ -1008,11 +1050,14 @@ export class AiTranslationParentProcessor extends WorkerHost {
       const qType = qData.type || 'SINGLE_CORRECT';
       const qDifficulty = qData.difficulty || 'MEDIUM';
 
+      const { subject: qSubject, chapter: qChapter } = await getSubjectAndChapter(qData.subjectId);
+      const qSection = await getExamSection(qSubject);
+
       // Create master Question
       const masterQ = await this.prisma.question.create({
         data: {
-          subjectId: defaultSubject.id,
-          chapterId: defaultChapter.id,
+          subjectId: qSubject.id,
+          chapterId: qChapter.id,
           ...(defaultLangId ? { defaultLanguageId: defaultLangId } : {}),
           type: qType as any,
           difficultyLevel: qDifficulty as any,
@@ -1104,7 +1149,7 @@ export class AiTranslationParentProcessor extends WorkerHost {
       await this.prisma.examQuestion.create({
         data: {
           examId: exam.id,
-          sectionId: examSection.id,
+          sectionId: qSection.id,
           questionId: masterQ.id,
           displayOrder: seqNum,
           marks: marksPerQ,
@@ -1138,8 +1183,8 @@ export class AiTranslationParentProcessor extends WorkerHost {
           examVersionId: examVersion.id,
           sourceQuestionId: masterQ.id,
           sequenceNumber: seqNum,
-          sectionName: (examSection as any).name || 'Section A',
-          subjectName: defaultSubject.name,
+          sectionName: (qSection as any).name || `${qSubject.name} Section`,
+          subjectName: qSubject.name,
           type: qType as any,
           difficultyLevel: qDifficulty as any,
           marks: marksPerQ,

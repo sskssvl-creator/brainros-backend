@@ -166,7 +166,7 @@ export class ResultService {
     for (const eq of examQuestions) {
       const answer = answerMap.get(eq.id);
       const question = eq.question;
-      const subjectId = eq.section.subjectId;
+      const subjectId = question.subjectId || eq.section?.subjectId;
       const chapterId = question.chapterId;
       const timeSpent = questionTimeMap.get(eq.id) || 0;
 
@@ -195,7 +195,7 @@ export class ResultService {
           timeSpent: 0,
         });
       }
-      if (!chapterMap.has(chapterId)) {
+      if (chapterId && !chapterMap.has(chapterId)) {
         chapterMap.set(chapterId, {
           totalQuestions: 0,
           correct: 0,
@@ -208,13 +208,18 @@ export class ResultService {
       }
 
       const subj = subjectMap.get(subjectId)!;
-      const chap = chapterMap.get(chapterId)!;
-      subj.totalQuestions++;
-      subj.maxScore += marksForCorrect;
-      subj.timeSpent += timeSpent;
-      chap.totalQuestions++;
-      chap.maxScore += marksForCorrect;
-      chap.timeSpent += timeSpent;
+      if (subj) {
+        subj.totalQuestions++;
+        subj.maxScore += marksForCorrect;
+        subj.timeSpent += timeSpent;
+      }
+
+      if (chapterId && chapterMap.has(chapterId)) {
+        const chap = chapterMap.get(chapterId)!;
+        chap.totalQuestions++;
+        chap.maxScore += marksForCorrect;
+        chap.timeSpent += timeSpent;
+      }
 
       if (
         !answer ||
@@ -223,8 +228,10 @@ export class ResultService {
           !answer.selectedOptions)
       ) {
         totalUnattempted++;
-        subj.unattempted++;
-        chap.unattempted++;
+        if (subj) subj.unattempted++;
+        if (chapterId && chapterMap.has(chapterId)) {
+          chapterMap.get(chapterId)!.unattempted++;
+        }
         continue;
       }
 
@@ -234,17 +241,27 @@ export class ResultService {
       if (isCorrect) {
         totalCorrect++;
         totalScore += marksForCorrect;
-        subj.correct++;
-        subj.score += marksForCorrect;
-        chap.correct++;
-        chap.score += marksForCorrect;
+        if (subj) {
+          subj.correct++;
+          subj.score += marksForCorrect;
+        }
+        if (chapterId && chapterMap.has(chapterId)) {
+          const chap = chapterMap.get(chapterId)!;
+          chap.correct++;
+          chap.score += marksForCorrect;
+        }
       } else {
         totalWrong++;
         totalScore -= marksForWrong;
-        subj.wrong++;
-        subj.score -= marksForWrong;
-        chap.wrong++;
-        chap.score -= marksForWrong;
+        if (subj) {
+          subj.wrong++;
+          subj.score -= marksForWrong;
+        }
+        if (chapterId && chapterMap.has(chapterId)) {
+          const chap = chapterMap.get(chapterId)!;
+          chap.wrong++;
+          chap.score -= marksForWrong;
+        }
       }
     }
 
@@ -357,6 +374,7 @@ export class ResultService {
         // Chapter results
         const chapterResultsData: any[] = [];
         for (const [chapterId, data] of chapterMap.entries()) {
+          if (!chapterId) continue;
           const chapAttempted = data.correct + data.wrong;
           const chapAccuracy =
             chapAttempted > 0 ? (data.correct / chapAttempted) * 100 : 0;
@@ -1452,6 +1470,161 @@ export class ResultService {
     return {
       success: true,
       message: `Detailed exam report sent to ${recipientEmail}`,
+      recipientEmail,
+      messageId: sendResult.messageId,
+    };
+  }
+
+  /**
+   * Dispatches the comprehensive exam performance analysis report PDF directly to the student's affiliated institution.
+   * Can be triggered by Admin, Super Admin, Institution Admin, or student.
+   */
+  async sendInstituteReportEmail(attemptId: string, user?: any, overrideEmail?: string) {
+    if (user) {
+      await this.resultAccessService.verifyAttemptAccess(user, attemptId);
+    }
+
+    const attempt = await this.prisma.attempt.findUnique({
+      where: { id: attemptId },
+      include: {
+        exam: true,
+        student: {
+          include: {
+            user: true,
+            institution: {
+              include: {
+                admins: {
+                  include: { user: true },
+                },
+              },
+            },
+          },
+        },
+        result: true,
+        candidateRanks: {
+          where: { rankType: 'OVERALL' },
+          take: 1,
+        },
+      },
+    });
+
+    if (!attempt) throw new NotFoundException(`Attempt '${attemptId}' not found.`);
+    if (!attempt.result) throw new BadRequestException('Result has not been calculated yet.');
+
+    const institution = attempt.student?.institution;
+    let recipientEmail: string | undefined = overrideEmail;
+
+    if (!recipientEmail) {
+      if (!institution) {
+        throw new BadRequestException(
+          `Student '${attempt.student?.name || 'Candidate'}' is not affiliated with any registered institution. Please provide a recipient email.`,
+        );
+      }
+      recipientEmail =
+        institution.email ||
+        institution.admins?.find((a) => a.user?.email)?.user?.email ||
+        undefined;
+    }
+
+    if (!recipientEmail || !recipientEmail.includes('@')) {
+      throw new BadRequestException(
+        institution
+          ? `Institution '${institution.name}' does not have a registered contact or administrator email address.`
+          : 'Valid institution recipient email is required.',
+      );
+    }
+
+    const instName = institution?.name || 'Institution';
+    this.logger.log(
+      `[ResultService] Generating full PDF report for institution '${instName}' (${recipientEmail}) on attempt '${attemptId}'...`,
+    );
+    const pdfBuffer = await this.generateResultPdf(attemptId);
+
+    const safeExam = attempt.exam.title.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 30);
+    const safeName = attempt.student.name.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 30);
+    const attachmentFilename = `Brainros_${safeExam}_${safeName}_Report.pdf`;
+
+    const examDateStr = attempt.exam.examDate
+      ? new Date(attempt.exam.examDate).toLocaleDateString('en-IN', {
+          day: '2-digit',
+          month: 'short',
+          year: 'numeric',
+        })
+      : 'Recently';
+
+    const rankRow = attempt.candidateRanks?.[0];
+    const rankText = rankRow?.rank ? `#${rankRow.rank.toLocaleString()}` : 'N/A';
+
+    const emailSubject = `Student Performance Report: ${attempt.student.name} — ${attempt.exam.title}`;
+    const htmlBody = `
+      <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: 0 auto; color: #1e293b; line-height: 1.6;">
+        <div style="background-color: #0f172a; padding: 24px; border-radius: 8px 8px 0 0; text-align: center;">
+          <h1 style="color: #ffffff; margin: 0; font-size: 24px; letter-spacing: 1px;">BRAINROS</h1>
+          <p style="color: #94a3b8; margin: 6px 0 0 0; font-size: 13px;">Institutional Student Assessment Report</p>
+        </div>
+        
+        <div style="background-color: #ffffff; padding: 28px; border: 1px solid #e2e8f0; border-top: none; border-radius: 0 0 8px 8px;">
+          <h2 style="color: #0f172a; margin-top: 0;">Dear ${instName} Administration,</h2>
+          <p>Please find attached the official 14-section comprehensive performance analysis report for candidate <strong>${attempt.student.name}</strong> (${attempt.student.studentCode || 'ID: ' + attempt.student.id.slice(0, 8)}) who completed <strong>${attempt.exam.title}</strong> on <strong>${examDateStr}</strong>.</p>
+          
+          <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 18px; margin: 20px 0;">
+            <h3 style="margin-top: 0; color: #4f46e5; font-size: 15px; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;">Candidate Metrics Overview</h3>
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Candidate Name:</td>
+                <td style="padding: 6px 0; font-weight: bold; color: #0f172a; text-align: right;">${attempt.student.name}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Total Score:</td>
+                <td style="padding: 6px 0; font-weight: bold; color: #0f172a; text-align: right;">${attempt.result.totalScore} / ${attempt.result.maxScore} (${Number(attempt.result.percentage).toFixed(1)}%)</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Accuracy:</td>
+                <td style="padding: 6px 0; font-weight: bold; color: #10b981; text-align: right;">${Number(attempt.result.accuracy).toFixed(1)}%</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Overall Cohort Rank:</td>
+                <td style="padding: 6px 0; font-weight: bold; color: #4f46e5; text-align: right;">${rankText}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; color: #64748b;">Question Breakdown:</td>
+                <td style="padding: 6px 0; color: #0f172a; text-align: right;">${attempt.result.correctAnswers} Correct, ${attempt.result.wrongAnswers} Wrong, ${attempt.result.unattempted} Skipped</td>
+              </tr>
+            </table>
+          </div>
+
+          <p style="font-size: 13px; color: #64748b;">The attached official PDF artifact includes all 14 diagnostic sections, complete subject and topic analytics, AI error root-cause diagnosis, speed-accuracy quadrant, and a tailored 14-day intervention curriculum.</p>
+          
+          <div style="margin-top: 30px; border-top: 1px solid #e2e8f0; padding-top: 18px; font-size: 12px; color: #94a3b8;">
+            <p style="margin: 0;">Best Regards,</p>
+            <p style="margin: 4px 0 0 0; font-weight: bold; color: #0f172a;">Brainros Assessment Operations</p>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const sendResult = await this.resendEmailService.sendEmail({
+      to: recipientEmail,
+      subject: emailSubject,
+      html: htmlBody,
+      attachments: [
+        {
+          filename: attachmentFilename,
+          content: pdfBuffer,
+        },
+      ],
+    });
+
+    if (!sendResult.success) {
+      throw new BadRequestException(
+        sendResult.error || 'Failed to dispatch report email to institution via email provider.',
+      );
+    }
+
+    return {
+      success: true,
+      message: `Official exam report sent to institution '${instName}' at ${recipientEmail}`,
+      institutionName: instName,
       recipientEmail,
       messageId: sendResult.messageId,
     };

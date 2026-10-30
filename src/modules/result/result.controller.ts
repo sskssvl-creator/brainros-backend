@@ -201,6 +201,27 @@ export class ResultController {
   }
 
   /**
+   * Exam Analysis Report Dispatch directly to the Candidate's Affiliated Institution.
+   * Attaches the canonical 14-section report PDF.
+   * Supports:
+   *  POST /results/:attemptId/send-institute-email
+   *  POST /students/me/results/:attemptId/send-institute-email
+   *  POST /admin/attempts/:attemptId/send-institute-report
+   */
+  @Post([
+    'results/:attemptId/send-institute-email',
+    'students/me/results/:attemptId/send-institute-email',
+    'admin/attempts/:attemptId/send-institute-report',
+  ])
+  async sendInstituteResultEmail(
+    @Param('attemptId') attemptId: string,
+    @CurrentUser() user: any,
+    @Body('email') overrideEmail?: string,
+  ) {
+    return this.resultService.sendInstituteReportEmail(attemptId, user, overrideEmail);
+  }
+
+  /**
    * Admin / Super Admin Exam Result Processing View & Stuck Attempt Detection.
    * GET /admin/exams/:examId/results/processing-status
    * GET /super-admin/exams/:examId/results/processing-status

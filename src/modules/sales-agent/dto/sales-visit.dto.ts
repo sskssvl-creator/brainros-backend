@@ -82,6 +82,10 @@ export class CreateSalesVisitDto {
   longitude?: number;
 
   @IsOptional()
+  @IsNumber()
+  accuracy?: number;
+
+  @IsOptional()
   @IsArray()
   @IsString({ each: true })
   photos?: string[];

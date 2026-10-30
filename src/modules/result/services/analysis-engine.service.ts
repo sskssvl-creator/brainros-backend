@@ -67,15 +67,16 @@ export class AnalysisEngineService {
   }
 
   /**
-   * Format performance level human readable label
+   * Format performance level human readable label:
+   * - Strong: 80% to 100% accuracy
+   * - Good: 50% to 79% accuracy
+   * - Need to Focus: < 50% accuracy
    */
-  getPerformanceLevelLabel(accuracy: number, percentage: number): string {
-    const metric = Math.max(accuracy, percentage);
-    if (metric >= 90) return 'Excellent';
-    if (metric >= 75) return 'Very Good';
-    if (metric >= 60) return 'Good';
-    if (metric >= 45) return 'Needs Improvement';
-    return 'Weak';
+  getPerformanceLevelLabel(accuracy: number, percentage?: number): string {
+    const acc = typeof accuracy === 'number' && !isNaN(accuracy) ? accuracy : (percentage ?? 0);
+    if (acc >= 80) return 'Strong';
+    if (acc >= 50) return 'Good';
+    return 'Need to Focus';
   }
 
   /**
@@ -174,20 +175,29 @@ export class AnalysisEngineService {
     }
 
     // ── 2. Time Used & Per-Question Analytics ──────────────────────────────
-    const startedAt = attempt.startedAt
-      ? new Date(attempt.startedAt).getTime()
-      : 0;
-    const submittedAt = attempt.submittedAt
-      ? new Date(attempt.submittedAt).getTime()
-      : Date.now();
-    const totalTimeUsedSeconds = Math.max(
-      0,
-      Math.floor((submittedAt - startedAt) / 1000),
-    );
+    let totalTimeUsedSeconds =
+      (attempt as any).timeUsedSeconds || (result as any).timeUsedSeconds || 0;
+
+    if (!totalTimeUsedSeconds && attempt.startedAt && attempt.submittedAt) {
+      const s = new Date(attempt.startedAt).getTime();
+      const e = new Date(attempt.submittedAt).getTime();
+      if (e > s) {
+        totalTimeUsedSeconds = Math.floor((e - s) / 1000);
+      }
+    }
+
+    if (!totalTimeUsedSeconds) {
+      // Meaningful conservative fallback: 75% of exam duration
+      totalTimeUsedSeconds = Math.max(
+        60,
+        Math.round((exam.durationMinutes || 60) * 60 * 0.75),
+      );
+    }
+
     const avgTimePerQuestion =
       result.totalQuestions > 0
         ? Math.round((totalTimeUsedSeconds / result.totalQuestions) * 10) / 10
-        : 0;
+        : 60;
 
     // Build map of timeLogs: examQuestionId -> totalSeconds
     const questionTimeMap = new Map<string, number>();
@@ -689,10 +699,15 @@ export class AnalysisEngineService {
     const existingMetadata = (result.metadata as any) || {};
     let aiPredictions: GeminiExamPredictionResult;
 
+    const currentSubjectNames = subjectItems.map((s) => s.subjectName);
+    const isCachedPlanValid =
+      existingMetadata.aiAnalysis?.fourteenDayPlan &&
+      this.isPlanSubjectValid(existingMetadata.aiAnalysis.fourteenDayPlan, currentSubjectNames);
+
     if (
       existingMetadata.aiAnalysis &&
       existingMetadata.aiAnalysis.errorAnalysis &&
-      existingMetadata.aiAnalysis.fourteenDayPlan
+      isCachedPlanValid
     ) {
       aiPredictions = existingMetadata.aiAnalysis;
     } else {
@@ -832,14 +847,17 @@ export class AnalysisEngineService {
       year: 'numeric',
     });
 
+    const testMode =
+      (attempt as any).schedule?.mode || (exam as any).mode || 'Online CBT';
+
     const section1StudentDetails: StudentDetailsSection = {
       studentName: student?.name || student?.user?.name || 'Student',
       studentId: student?.studentCode || student?.studentId || 'BR26-STU-001',
       examination: exam.examTarget?.name ? `${exam.examTarget.name} Mock Test` : exam.title,
-      className: student?.studentClass?.name || '12th / 2nd PUC',
+      className: student?.studentClass?.name || 'Class 12 / Competitive',
       testNumber: (exam as any).code || exam.title,
       testDate: testDateFormatted,
-      testMode: 'Online',
+      testMode,
       totalQuestions: result.totalQuestions,
       maximumMarks: result.maxScore,
     };
@@ -921,12 +939,8 @@ export class AnalysisEngineService {
     });
 
     // SECTION 5: Topic-Wise Performance
-    const section5TopicWisePerformance: TopicPerformanceRow[] = chapterItems.map((c) => {
-      let status: 'Excellent' | 'Strong' | 'Needs Improvement' | 'Weak' = 'Needs Improvement';
-      if (c.accuracy >= 90) status = 'Excellent';
-      else if (c.accuracy >= 75) status = 'Strong';
-      else if (c.accuracy >= 60) status = 'Needs Improvement';
-      else status = 'Weak';
+    let section5TopicWisePerformance: TopicPerformanceRow[] = chapterItems.map((c) => {
+      const status = this.getPerformanceLevelLabel(c.accuracy) as any;
 
       return {
         topic: c.chapterName,
@@ -938,6 +952,19 @@ export class AnalysisEngineService {
         wrong: c.wrong,
       };
     }).sort((a, b) => b.accuracy - a.accuracy);
+
+    // Fallback if no chapter results exist (unchaptered questions): group by subjects
+    if (section5TopicWisePerformance.length === 0 && subjectItems.length > 0) {
+      section5TopicWisePerformance = subjectItems.map((s) => ({
+        topic: `${s.subjectName} Core Modules`,
+        subjectName: s.subjectName,
+        accuracy: s.accuracy,
+        status: this.getPerformanceLevelLabel(s.accuracy) as any,
+        totalQuestions: s.totalQuestions,
+        correct: s.correct,
+        wrong: s.wrong,
+      }));
+    }
 
     // SECTION 6: Strength & Weakness Analysis
     const topStrengths: string[] = [];
@@ -1167,53 +1194,163 @@ export class AnalysisEngineService {
       .filter((v, i, a) => a.findIndex((t) => t.chapterId === v.chapterId) === i)
       .sort((a, b) => a.accuracy - b.accuracy);
 
-    const s1Chaps = sortedWeakChapters.filter((c) => c.subjectName === (subjectItems[0]?.subjectName || 'Physics')).slice(0, 3).map((c) => c.chapterName);
-    const s2Chaps = sortedWeakChapters.filter((c) => c.subjectName === (subjectItems[1]?.subjectName || 'Chemistry')).slice(0, 3).map((c) => c.chapterName);
-    const s3Chaps = sortedWeakChapters.filter((c) => c.subjectName === (subjectItems[2]?.subjectName || 'Biology') || c.subjectName === (subjectItems[2]?.subjectName || 'Mathematics')).slice(0, 3).map((c) => c.chapterName);
+    const activeSubjects =
+      subjectItems.length > 0
+        ? subjectItems
+        : [{ subjectId: 'gen-1', subjectName: exam.title || 'General', accuracy: result.accuracy }];
 
-    const blocks: FourteenDayPlanDayBlock[] = [
-      {
-        period: 'Days 1–3',
-        title: `${subjectItems[0]?.subjectName || 'Physics'} Focus & Numerical Drilling`,
-        subject: subjectItems[0]?.subjectName || 'Physics',
-        focusChapters: s1Chaps.length > 0 ? s1Chaps : ['Mechanics', 'Electrostatics', 'Optics'],
-        activities: [
-          'Core formula derivation and concept reinforcement',
-          'Solve 50–75 standard numerical problems daily',
-          'Review previous mistakes and note key traps',
-        ],
-        practiceVolume: '50–75 questions/day',
-      },
-      {
-        period: 'Days 4–6',
-        title: `${subjectItems[1]?.subjectName || 'Chemistry'} High-Yield & Physical Chemistry`,
-        subject: subjectItems[1]?.subjectName || 'Chemistry',
-        focusChapters: s2Chaps.length > 0 ? s2Chaps : ['Equilibrium', 'Electrochemistry', 'Organic Mechanisms'],
-        activities: [
-          'Physical Chemistry calculation drills & formula sheet revision',
-          'NCERT line-by-line reading for Inorganic reactions',
-          'Reaction mechanisms and reagent charts for Organic chemistry',
-        ],
-        practiceVolume: '60–80 questions/day',
-      },
-      {
-        period: 'Days 7–9',
-        title: `${subjectItems[2]?.subjectName || 'Biology / Math'} Intensive Theory & Problem Solving`,
-        subject: subjectItems[2]?.subjectName || 'Biology',
-        focusChapters: s3Chaps.length > 0 ? s3Chaps : ['Physiology', 'Genetics', 'Calculus'],
-        activities: [
-          'NCERT diagram review and factual memorization drills',
-          'High-frequency PYQ (Previous Year Questions) practice',
-          'Timed section drills under 45 minutes',
-        ],
-        practiceVolume: '70–90 questions/day',
-      },
+    const blocks: FourteenDayPlanDayBlock[] = [];
+
+    if (activeSubjects.length === 1) {
+      // ── SINGLE SUBJECT EXAM (e.g. Maths Only, Physics Only) ──────────────
+      const s = activeSubjects[0];
+      const sChaps = sortedWeakChapters
+        .filter((c) => c.subjectName === s.subjectName || c.subjectId === (s as any).subjectId)
+        .map((c) => c.chapterName);
+      const phase1Chaps = sChaps.slice(0, 2).length ? sChaps.slice(0, 2) : ['Foundational Problem Areas', 'Core Concepts'];
+      const phase2Chaps = sChaps.slice(2, 4).length ? sChaps.slice(2, 4) : ['High-Yield Standard Problems', 'Formula Applications'];
+      const phase3Chaps = sChaps.slice(4, 6).length ? sChaps.slice(4, 6) : ['Advanced Numericals', 'High-Difficulty Questions'];
+
+      blocks.push(
+        {
+          period: 'Days 1–3',
+          title: `${s.subjectName} — Core Theory & Fundamental Formulae`,
+          subject: s.subjectName,
+          focusChapters: phase1Chaps,
+          activities: [
+            'Deep conceptual derivation and formula notebook consolidation',
+            'Solve 40–60 fundamental questions to lock in core principles',
+            'Identify traps and recurring mistakes from this test',
+          ],
+          practiceVolume: '40–60 questions/day',
+        },
+        {
+          period: 'Days 4–6',
+          title: `${s.subjectName} — Application Drilling & Moderate Problems`,
+          subject: s.subjectName,
+          focusChapters: phase2Chaps,
+          activities: [
+            'Focus on multi-step analytical and standard numerical applications',
+            'Time-restricted chapter-level practice (60–90 seconds per question)',
+            'Resolve all incorrect answers from this mock test systematically',
+          ],
+          practiceVolume: '50–70 questions/day',
+        },
+        {
+          period: 'Days 7–9',
+          title: `${s.subjectName} — Advanced Problem Solving & Speed Precision`,
+          subject: s.subjectName,
+          focusChapters: phase3Chaps,
+          activities: [
+            'High-difficulty previous year questions (PYQs) and challenging formats',
+            'Timed sprint drills under strict 45-minute limits',
+            'Execution of option elimination technique to avoid negative marking',
+          ],
+          practiceVolume: '60–80 questions/day',
+        },
+      );
+    } else if (activeSubjects.length === 2) {
+      // ── TWO SUBJECT EXAM (e.g. Physics + Chemistry) ──────────────────────
+      const s1 = activeSubjects[0];
+      const s2 = activeSubjects[1];
+      const s1Chaps = sortedWeakChapters.filter((c) => c.subjectName === s1.subjectName || c.subjectId === (s1 as any).subjectId).slice(0, 3).map((c) => c.chapterName);
+      const s2Chaps = sortedWeakChapters.filter((c) => c.subjectName === s2.subjectName || c.subjectId === (s2 as any).subjectId).slice(0, 3).map((c) => c.chapterName);
+
+      blocks.push(
+        {
+          period: 'Days 1–3',
+          title: `${s1.subjectName} — Priority Remediation & Core Formulas`,
+          subject: s1.subjectName,
+          focusChapters: s1Chaps.length ? s1Chaps : ['Priority Conceptual Areas'],
+          activities: [
+            'Core formula derivation and concept reinforcement',
+            'Solve 50–70 standard numerical problems daily',
+            'Log and audit all mistakes in dedicated Error Notebook',
+          ],
+          practiceVolume: '50–70 questions/day',
+        },
+        {
+          period: 'Days 4–6',
+          title: `${s2.subjectName} — High-Yield Revision & Numerical Precision`,
+          subject: s2.subjectName,
+          focusChapters: s2Chaps.length ? s2Chaps : ['High-Yield Chapters'],
+          activities: [
+            'High-frequency numerical practice and formula sheet revision',
+            'Focused PYQ solving with strict timer enforcement',
+            'Option elimination drills to eliminate avoidable guesses',
+          ],
+          practiceVolume: '50–70 questions/day',
+        },
+        {
+          period: 'Days 7–9',
+          title: `${s1.subjectName} & ${s2.subjectName} — Cross-Subject Integrated Drills`,
+          subject: `${s1.subjectName} & ${s2.subjectName}`,
+          focusChapters: [...s1Chaps.slice(0, 2), ...s2Chaps.slice(0, 2)],
+          activities: [
+            'Combined two-subject timed drills under 90 minutes',
+            'Speed and accuracy balance check across both subjects',
+            'Comprehensive review of weak questions from Days 1–6',
+          ],
+          practiceVolume: '60–80 questions/day',
+        },
+      );
+    } else {
+      // ── THREE OR MORE SUBJECTS (NEET / JEE / CET Full Papers) ───────────
+      const s1 = activeSubjects[0];
+      const s2 = activeSubjects[1];
+      const s3 = activeSubjects[2];
+      const s1Chaps = sortedWeakChapters.filter((c) => c.subjectName === s1.subjectName || c.subjectId === (s1 as any).subjectId).slice(0, 3).map((c) => c.chapterName);
+      const s2Chaps = sortedWeakChapters.filter((c) => c.subjectName === s2.subjectName || c.subjectId === (s2 as any).subjectId).slice(0, 3).map((c) => c.chapterName);
+      const s3Chaps = sortedWeakChapters.filter((c) => c.subjectName === s3.subjectName || c.subjectId === (s3 as any).subjectId).slice(0, 3).map((c) => c.chapterName);
+
+      blocks.push(
+        {
+          period: 'Days 1–3',
+          title: `${s1.subjectName} Focus & Numerical Drilling`,
+          subject: s1.subjectName,
+          focusChapters: s1Chaps.length ? s1Chaps : ['Core Problem Areas'],
+          activities: [
+            'Core formula derivation and concept reinforcement',
+            'Solve 50–75 standard numerical problems daily',
+            'Review previous mistakes and note key traps',
+          ],
+          practiceVolume: '50–75 questions/day',
+        },
+        {
+          period: 'Days 4–6',
+          title: `${s2.subjectName} High-Yield & Application Practice`,
+          subject: s2.subjectName,
+          focusChapters: s2Chaps.length ? s2Chaps : ['High-Yield Chapters'],
+          activities: [
+            'Targeted problem-solving drills and formula sheet revision',
+            'Line-by-line concept revision for core theoretical areas',
+            'Timed section drills under 45 minutes',
+          ],
+          practiceVolume: '60–80 questions/day',
+        },
+        {
+          period: 'Days 7–9',
+          title: `${s3.subjectName} Intensive Theory & Problem Solving`,
+          subject: s3.subjectName,
+          focusChapters: s3Chaps.length ? s3Chaps : ['Core Analytical Chapters'],
+          activities: [
+            'High-frequency PYQ (Previous Year Questions) practice',
+            'Diagram and factual memorization drills',
+            'Rapid option elimination practice to prevent negative marks',
+          ],
+          practiceVolume: '70–90 questions/day',
+        },
+      );
+    }
+
+    // Common Consolidation & Mock Test Days 10–14
+    blocks.push(
       {
         period: 'Days 10–11',
         title: 'Mixed Practice & Error Notebook Remediation',
         focusChapters: ['All Priority Weak Areas', 'Error Notebook Questions'],
         activities: [
-          'Solve 100+ mixed-subject questions from previous mistakes',
+          'Solve 100+ mixed questions targeting previous mistakes',
           'Re-attempt all incorrect questions from this BRAINROS test',
           'Speed drilling with 60-second time limits per question',
         ],
@@ -1224,7 +1361,7 @@ export class AnalysisEngineService {
         title: 'Full-Length BRAINROS Mock Test',
         focusChapters: ['Full Exam Syllabus'],
         activities: [
-          'Take full-length 3-hour timed exam under strict exam conditions',
+          `Take full-length ${Math.round(exam.durationMinutes || 180)}-minute timed exam under strict exam conditions`,
           'Execute Round 1, Round 2, Round 3 time management strategy',
           'Strictly adhere to 50-50 elimination rule to minimize guessing',
         ],
@@ -1244,18 +1381,23 @@ export class AnalysisEngineService {
       {
         period: 'Day 14',
         title: 'Final Rapid Revision & Formula Sheets',
-        focusChapters: ['High-Weightage Formulas', 'NCERT Highlights'],
+        focusChapters: ['High-Weightage Formulas', 'Summary Highlights'],
         activities: [
-          'Rapid flashcard and formula handbook revision across all subjects',
-          'Review summary tables, named reactions, and physical constants',
+          'Rapid flashcard and formula handbook revision across tested subjects',
+          'Review summary tables, derivations, and key constants',
           'Mental preparation, relaxation, and exam pacing review',
         ],
         practiceVolume: 'Rapid Recall',
       },
-    ];
+    );
+
+    const isAiPlanValid = this.isPlanSubjectValid(
+      aiPredictions?.fourteenDayPlan,
+      subjectItems.map((s) => s.subjectName),
+    );
 
     const section11FourteenDayPlan: FourteenDayImprovementPlanSection =
-      aiPredictions?.fourteenDayPlan?.blocks?.length
+      isAiPlanValid && aiPredictions?.fourteenDayPlan?.blocks?.length
         ? aiPredictions.fourteenDayPlan
         : { blocks };
 
@@ -1279,7 +1421,7 @@ export class AnalysisEngineService {
               },
               {
                 id: 'act-3',
-                text: `Practise at least 50 ${subjectItems[0]?.subjectName || 'Physics'} numerical problems daily.`,
+                text: `Practise at least 50 ${subjectItems[0]?.subjectName || 'subject-specific'} numerical problems daily.`,
                 category: 'Practice',
                 isKeyAction: true,
               },
@@ -1369,7 +1511,7 @@ export class AnalysisEngineService {
             overallRating: overallRatingStr,
           };
 
-    return {
+    const masterReport: FullAnalysisReport = {
       attemptId,
       examId: exam.id,
       examTitle: exam.title,
@@ -1424,6 +1566,93 @@ export class AnalysisEngineService {
       section12ActionChecklist,
       section13ParentSummary,
       section14PerformanceIndex,
+    };
+
+    // ── Validate Calculation Invariants across Canonical Report ─────────────
+    this.validateCalculationInvariants(masterReport);
+
+    return masterReport;
+  }
+
+  /**
+   * Validates calculation invariants across the canonical report data model:
+   * 1. Correct + Wrong + Unattempted === Total Questions
+   * 2. Sum of subject scores reconciles with total score
+   * 3. Error analysis wrong questions reconcile with overall wrong count
+   * 4. Obtained marks <= maximum marks
+   * 5. Accuracy is bounded between 0% and 100%
+   */
+  public validateCalculationInvariants(report: FullAnalysisReport): {
+    isValid: boolean;
+    issues: string[];
+  } {
+    const issues: string[] = [];
+    const totalQ = report.overall?.totalQuestions ?? 0;
+    const computedQ =
+      (report.overall?.correctCount ?? 0) +
+      (report.overall?.wrongCount ?? 0) +
+      (report.overall?.unattemptedCount ?? 0);
+
+    if (totalQ > 0 && computedQ !== totalQ) {
+      issues.push(
+        `Question count mismatch: total is ${totalQ}, but correct(${report.overall.correctCount}) + wrong(${report.overall.wrongCount}) + unattempted(${report.overall.unattemptedCount}) = ${computedQ}`,
+      );
+    }
+
+    if (
+      report.overall?.obtainedMarks !== undefined &&
+      report.overall?.totalMarks !== undefined &&
+      report.overall.obtainedMarks > report.overall.totalMarks + 0.01
+    ) {
+      issues.push(
+        `Obtained marks (${report.overall.obtainedMarks}) exceeds maximum marks (${report.overall.totalMarks})`,
+      );
+    }
+
+    if (
+      report.overall?.accuracy !== undefined &&
+      (report.overall.accuracy < 0 || report.overall.accuracy > 100.01)
+    ) {
+      issues.push(
+        `Accuracy (${report.overall.accuracy}%) is out of permitted range [0, 100]`,
+      );
+    }
+
+    // Reconcile subject scores if multiple subjects exist
+    if (report.subjectWiseAnalysis?.rows?.length > 0) {
+      const sumSubjectScores = report.subjectWiseAnalysis.rows.reduce(
+        (acc, r) => acc + (r.score ?? 0),
+        0,
+      );
+      if (Math.abs(sumSubjectScores - report.overall.obtainedMarks) > 0.05) {
+        issues.push(
+          `Subject scores sum (${sumSubjectScores}) differs from total score (${report.overall.obtainedMarks})`,
+        );
+      }
+    }
+
+    // Reconcile error analysis total questions if error analysis is present
+    if (report.section7ErrorAnalysis?.categories?.length > 0) {
+      const errorCount = report.section7ErrorAnalysis.categories.reduce(
+        (acc, c) => acc + (c.questionCount ?? 0),
+        0,
+      );
+      if (errorCount > 0 && errorCount !== report.overall.wrongCount) {
+        issues.push(
+          `Error analysis categorized questions (${errorCount}) differs from wrong answer count (${report.overall.wrongCount})`,
+        );
+      }
+    }
+
+    if (issues.length > 0) {
+      this.logger.warn(
+        `[CalculationIntegrity] Invariants warning for attempt '${report.attemptId}': ${issues.join('; ')}`,
+      );
+    }
+
+    return {
+      isValid: issues.length === 0,
+      issues,
     };
   }
 
@@ -1593,5 +1822,22 @@ export class AnalysisEngineService {
     }
 
     return recs;
+  }
+
+  private isPlanSubjectValid(
+    plan: FourteenDayImprovementPlanSection | undefined,
+    allowedSubjectNames: string[],
+  ): boolean {
+    if (!plan || !plan.blocks || !Array.isArray(plan.blocks) || plan.blocks.length === 0) return false;
+    if (!allowedSubjectNames || allowedSubjectNames.length === 0) return true;
+    const allowed = new Set(allowedSubjectNames.map((s) => (s || '').toLowerCase().trim()));
+    allowed.add('all subjects');
+    allowed.add('all');
+    allowed.add('general');
+    return !plan.blocks.some((b) => {
+      if (!b.subject) return false;
+      const sub = b.subject.toLowerCase().trim();
+      return ![...allowed].some((a) => a && (sub.includes(a) || a.includes(sub)));
+    });
   }
 }

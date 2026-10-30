@@ -326,7 +326,7 @@ export class ExamReportPdfService {
           doc.fillColor(brandIndigo).fontSize(7.5).font(fBold).text(`${top.accuracy.toFixed(1)}%`, trX, y + 3.5, { width: tCols[2], align: 'center' });
           trX += tCols[2];
 
-          const statusColor = top.status === 'Excellent' || top.status === 'Strong' ? '#15803D' : top.status === 'Needs Improvement' ? '#D97706' : '#B91C1C';
+          const statusColor = top.status === 'Strong' || top.status === 'Excellent' ? '#15803D' : top.status === 'Good' ? '#2563EB' : top.status === 'Needs Improvement' ? '#D97706' : '#B91C1C';
           doc.fillColor(statusColor).fontSize(7.5).font(fBold).text(top.status, trX, y + 3.5, { width: tCols[3], align: 'center' });
 
           y += 15;
