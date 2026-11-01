@@ -741,8 +741,9 @@ export class ResultService {
 
     const attempt = await this.prisma.attempt.findUnique({
       where: { id: attemptId },
-      include: { status: true },
+      include: { status: true, language: true },
     });
+    const attemptLangCode = (attempt as any).language?.code?.toLowerCase() || 'en';
     if (!attempt) throw new NotFoundException('Attempt not found');
     if (!['SUBMITTED', 'AUTO_SUBMITTED', 'EVALUATED'].includes(attempt.status.name)) {
       throw new BadRequestException('Exam must be submitted to view review');
@@ -794,8 +795,18 @@ export class ResultService {
         const eq = aq.examQuestion;
         const answer = answerMap.get(eq.id);
         const qTrans =
-          eq.question.translations.find((t) => t.languageId === attempt.languageId) ||
-          eq.question.translations[0];
+          eq.question.translations.find(
+            (t) =>
+              t.languageId === attempt.languageId ||
+              (t as any).language?.code?.toLowerCase() === attemptLangCode ||
+              (t as any).languageCode?.toLowerCase() === attemptLangCode,
+          ) ||
+          eq.question.translations.find(
+            (t) =>
+              (t as any).language?.code?.toLowerCase() === 'en' ||
+              (t as any).languageCode?.toLowerCase() === 'en',
+          ) ||
+          null;
 
         // Format options using the attempt's specific randomized option sequence
         const options =
@@ -803,8 +814,18 @@ export class ResultService {
             ? aq.options.map((opt) => {
                 const o = opt.examQuestionOption;
                 const oTrans =
-                  o.translations.find((t) => t.languageId === attempt.languageId) ||
-                  o.translations[0];
+                  o.translations?.find(
+                    (t: any) =>
+                      t.languageId === attempt.languageId ||
+                      t.language?.code?.toLowerCase() === attemptLangCode ||
+                      t.languageCode?.toLowerCase() === attemptLangCode,
+                  ) ||
+                  o.translations?.find(
+                    (t: any) =>
+                      t.language?.code?.toLowerCase() === 'en' ||
+                      t.languageCode?.toLowerCase() === 'en',
+                  ) ||
+                  null;
                 return {
                   id: o.id,
                   optionLabel: String.fromCharCode(64 + opt.displayOrder),
@@ -816,8 +837,18 @@ export class ResultService {
               })
             : eq.question.options.map((o) => {
                 const oTrans =
-                  o.translations.find((t) => t.languageId === attempt.languageId) ||
-                  o.translations[0];
+                  o.translations?.find(
+                    (t: any) =>
+                      t.languageId === attempt.languageId ||
+                      t.language?.code?.toLowerCase() === attemptLangCode ||
+                      t.languageCode?.toLowerCase() === attemptLangCode,
+                  ) ||
+                  o.translations?.find(
+                    (t: any) =>
+                      t.language?.code?.toLowerCase() === 'en' ||
+                      t.languageCode?.toLowerCase() === 'en',
+                  ) ||
+                  null;
                 return {
                   id: o.id,
                   optionLabel: o.optionLabel || o.optionKey || '',
@@ -885,8 +916,18 @@ export class ResultService {
     return examQuestions.map((eq) => {
       const answer = answerMap.get(eq.id);
       const qTrans =
-        eq.question.translations.find((t) => t.languageId === attempt.languageId) ||
-        eq.question.translations[0];
+        eq.question.translations.find(
+          (t) =>
+            t.languageId === attempt.languageId ||
+            (t as any).language?.code?.toLowerCase() === attemptLangCode ||
+            (t as any).languageCode?.toLowerCase() === attemptLangCode,
+        ) ||
+        eq.question.translations.find(
+          (t) =>
+            (t as any).language?.code?.toLowerCase() === 'en' ||
+            (t as any).languageCode?.toLowerCase() === 'en',
+        ) ||
+        null;
 
       return {
         displayOrder: eq.displayOrder,
@@ -903,8 +944,18 @@ export class ResultService {
         explanation: qTrans?.explanation || '',
         options: eq.question.options.map((o) => {
           const oTrans =
-            o.translations.find((t) => t.languageId === attempt.languageId) ||
-            o.translations[0];
+            o.translations?.find(
+              (t: any) =>
+                t.languageId === attempt.languageId ||
+                t.language?.code?.toLowerCase() === attemptLangCode ||
+                t.languageCode?.toLowerCase() === attemptLangCode,
+            ) ||
+            o.translations?.find(
+              (t: any) =>
+                t.language?.code?.toLowerCase() === 'en' ||
+                t.languageCode?.toLowerCase() === 'en',
+            ) ||
+            null;
           return {
             id: o.id,
             optionLabel: o.optionLabel || o.optionKey || '',

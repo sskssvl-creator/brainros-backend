@@ -1127,6 +1127,16 @@ export class AiTranslationParentProcessor extends WorkerHost {
               displayOrder: oIdx + 1,
             },
           });
+          if (defaultLangId) {
+            await this.prisma.questionOptionTranslation.create({
+              data: {
+                optionId: opt.id,
+                languageId: defaultLangId,
+                optionText: optDef.text || '',
+                optionContent: optDef.content || null,
+              },
+            });
+          }
           createdOpts.push(opt);
         }
       }
@@ -1224,7 +1234,7 @@ export class AiTranslationParentProcessor extends WorkerHost {
       // ExamVersionOption snapshots (isCorrect propagated)
       for (let oIdx = 0; oIdx < createdOpts.length; oIdx++) {
         const opt = createdOpts[oIdx];
-        await this.prisma.examVersionOption.create({
+        const evOpt = await this.prisma.examVersionOption.create({
           data: {
             examVersionQuestionId: evq.id,
             sourceOptionId: opt.id,
@@ -1236,6 +1246,17 @@ export class AiTranslationParentProcessor extends WorkerHost {
             isCorrect: opt.isCorrect,
           },
         });
+        if (defaultLangId) {
+          await this.prisma.examVersionOptionTranslation.create({
+            data: {
+              examVersionOptionId: evOpt.id,
+              languageId: defaultLangId,
+              languageCode: 'en',
+              optionText: opt.optionText || '',
+              optionContent: opt.optionContent || null,
+            },
+          });
+        }
       }
 
       // Report dbSaveProgress every REPORT_INTERVAL or on the last question

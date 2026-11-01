@@ -604,6 +604,15 @@ export class AiTranslationService {
               displayOrder: oIdx + 1,
             },
           });
+          if (defaultLangId) {
+            await tx.questionOptionTranslation.create({
+              data: {
+                optionId: createdOpt.id,
+                languageId: defaultLangId,
+                optionText: optDef.text || '',
+              },
+            });
+          }
           createdOpts.push(createdOpt);
         }
 
@@ -650,7 +659,7 @@ export class AiTranslationService {
         // Create ExamVersionOptions snapshots
         for (let oIdx = 0; oIdx < createdOpts.length; oIdx++) {
           const opt = createdOpts[oIdx];
-          await tx.examVersionOption.create({
+          const evOpt = await tx.examVersionOption.create({
             data: {
               examVersionQuestionId: evq.id,
               sourceOptionId: opt.id,
@@ -661,6 +670,16 @@ export class AiTranslationService {
               isCorrect: false,
             },
           });
+          if (defaultLangId) {
+            await tx.examVersionOptionTranslation.create({
+              data: {
+                examVersionOptionId: evOpt.id,
+                languageId: defaultLangId,
+                languageCode: 'en',
+                optionText: opt.optionText || '',
+              },
+            });
+          }
         }
       }
 
@@ -2029,7 +2048,7 @@ export class AiTranslationService {
       // ExamVersionOption snapshots (isCorrect propagated)
       for (let oIdx = 0; oIdx < createdOpts.length; oIdx++) {
         const opt = createdOpts[oIdx];
-        await this.prisma.examVersionOption.create({
+        const evOpt = await this.prisma.examVersionOption.create({
           data: {
             examVersionQuestionId: evq.id,
             sourceOptionId: opt.id,
@@ -2041,6 +2060,17 @@ export class AiTranslationService {
             isCorrect: opt.isCorrect,
           } as any,
         });
+        if (defaultLangId) {
+          await this.prisma.examVersionOptionTranslation.create({
+            data: {
+              examVersionOptionId: evOpt.id,
+              languageId: defaultLangId,
+              languageCode: 'en',
+              optionText: opt.optionText || '',
+              optionContent: opt.optionContent || null,
+            },
+          });
+        }
       }
 
       // Report dbSaveProgress every REPORT_INTERVAL or on the last question
@@ -2093,4 +2123,708 @@ export class AiTranslationService {
 
     return examVersion.id;
   }
+
+  /**
+   * Helper to convert Tiptap JSON or string content to clean semantic HTML
+   */
+  private serializeRichDocToHtml(docOrText: any, fallbackText?: string): string {
+    if (!docOrText && !fallbackText) return '';
+
+    const escapeHtml = (str: string) => {
+      return (str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    };
+
+    let doc = docOrText;
+    if (typeof doc === 'string') {
+      try {
+        const parsed = JSON.parse(doc);
+        if (parsed && typeof parsed === 'object' && parsed.type === 'doc') {
+          doc = parsed;
+        }
+      } catch {
+        // Plain string
+        return escapeHtml(doc).replace(/\n/g, '<br />');
+      }
+    }
+
+    if (!doc || typeof doc !== 'object' || doc.type !== 'doc' || !Array.isArray(doc.content)) {
+      return escapeHtml(typeof docOrText === 'string' ? docOrText : fallbackText || '').replace(/\n/g, '<br />');
+    }
+
+    const walk = (node: any): string => {
+      if (!node) return '';
+
+      if (node.type === 'text') {
+        let text = escapeHtml(node.text || '');
+        if (node.marks && Array.isArray(node.marks)) {
+          for (const mark of node.marks) {
+            if (mark.type === 'bold') text = `<strong>${text}</strong>`;
+            if (mark.type === 'italic') text = `<em>${text}</em>`;
+            if (mark.type === 'underline') text = `<u>${text}</u>`;
+            if (mark.type === 'strike') text = `<s>${text}</s>`;
+            if (mark.type === 'code') text = `<code>${text}</code>`;
+          }
+        }
+        return text;
+      }
+
+      if (node.type === 'inlineMath') {
+        const latex = node.attrs?.latex || '';
+        return `<span class="math-tex inline-math" data-latex="${escapeHtml(latex)}">$${latex}$</span>`;
+      }
+
+      if (node.type === 'blockMath') {
+        const latex = node.attrs?.latex || '';
+        return `<div class="math-tex block-math" data-latex="${escapeHtml(latex)}">$$${latex}$$</div>`;
+      }
+
+      if (node.type === 'image') {
+        const src = node.attrs?.src || '';
+        const alt = escapeHtml(node.attrs?.alt || 'Question Diagram');
+        return `<div class="diagram-wrapper"><img src="${src}" alt="${alt}" class="diagram-img" />${alt && alt !== 'Question diagram' && alt !== '[Image]' ? `<div class="diagram-caption">${alt}</div>` : ''}</div>`;
+      }
+
+      const inner = node.content && Array.isArray(node.content) ? node.content.map(walk).join('') : '';
+
+      switch (node.type) {
+        case 'paragraph':
+          return `<p>${inner || '&nbsp;'}</p>`;
+        case 'heading':
+          const level = Math.min(Math.max(1, node.attrs?.level || 3), 6);
+          return `<h${level}>${inner}</h${level}>`;
+        case 'bulletList':
+          return `<ul>${inner}</ul>`;
+        case 'orderedList':
+          return `<ol>${inner}</ol>`;
+        case 'listItem':
+          return `<li>${inner}</li>`;
+        case 'table':
+          return `<table class="content-table">${inner}</table>`;
+        case 'tableRow':
+          return `<tr>${inner}</tr>`;
+        case 'tableCell':
+          return `<td>${inner}</td>`;
+        case 'tableHeader':
+          return `<th>${inner}</th>`;
+        case 'blockquote':
+          return `<blockquote>${inner}</blockquote>`;
+        case 'horizontalRule':
+          return '<hr />';
+        default:
+          return inner;
+      }
+    };
+
+    return doc.content.map(walk).join('');
+  }
+
+  /**
+   * GET /api/ai-translations/jobs/:jobId/print
+   * Generate complete, publication-ready, multi-page printable HTML question paper for the selected language
+   */
+  async generatePrintableQuestionPaperHtml(
+    jobId: string,
+    languageId?: string,
+    languageCode?: string,
+  ): Promise<string> {
+    const job = await this.prisma.aiTranslationJob.findUnique({
+      where: { id: jobId },
+    });
+
+    if (!job) {
+      throw new NotFoundException(`AI Translation Job '${jobId}' not found.`);
+    }
+
+    const exam = await this.prisma.exam.findUnique({
+      where: { id: job.examId },
+      include: {
+        examTarget: true,
+        sections: { include: { subject: true }, orderBy: { displayOrder: 'asc' } },
+      },
+    });
+
+    const examVersion = job.examVersionId
+      ? await this.prisma.examVersion.findUnique({
+          where: { id: job.examVersionId },
+        })
+      : null;
+
+    // 1. Resolve Target Language
+    const allLanguages = await this.prisma.preferredLanguage.findMany();
+    let targetLang = allLanguages.find(
+      (l) =>
+        (languageId && l.id === languageId) ||
+        (languageCode && l.code?.toLowerCase() === languageCode.toLowerCase()) ||
+        (languageId && l.code?.toLowerCase() === languageId.toLowerCase()),
+    );
+
+    if (!targetLang) {
+      targetLang =
+        allLanguages.find((l) => l.code?.toLowerCase() === 'en') ||
+        allLanguages[0];
+    }
+
+    const isEnglish = targetLang?.code?.toLowerCase() === 'en';
+    const targetLangId = targetLang?.id;
+    const targetLangCode = targetLang?.code?.toLowerCase() || 'en';
+    const targetLangName = targetLang?.name || 'English';
+
+    // 2. Fetch all ExamVersionQuestions with options and translations
+    const evQuestions = await this.prisma.examVersionQuestion.findMany({
+      where: { examVersionId: job.examVersionId },
+      include: {
+        options: {
+          orderBy: { displayOrder: 'asc' },
+          include: {
+            translations: true,
+          },
+        },
+        translations: true,
+      },
+      orderBy: { sequenceNumber: 'asc' },
+    });
+
+    // 3. Fetch source questions for rich content fallback
+    const sourceQIds = evQuestions.map((q) => q.sourceQuestionId).filter(Boolean);
+    const masterQuestions = await this.prisma.question.findMany({
+      where: { id: { in: sourceQIds } },
+      include: {
+        translations: true,
+        options: {
+          include: {
+            translations: true,
+          },
+        },
+      },
+    });
+    const masterQMap = new Map(masterQuestions.map((mq) => [mq.id, mq]));
+
+    const examTitle = exam?.title || 'Examination Question Paper';
+    const examCode = (exam as any)?.code || '';
+    const examTargetName = exam?.examTarget?.name || '';
+    const durationMinutes = exam?.durationMinutes || examVersion?.durationMinutes || 60;
+    const totalMarks = examVersion?.totalMarks || evQuestions.length * 4;
+    const totalQuestions = evQuestions.length;
+
+    // 4. Build Question Cards
+    const questionCardsHtml = evQuestions.map((q, idx) => {
+      const seq = q.sequenceNumber || idx + 1;
+      const masterQ = masterQMap.get(q.sourceQuestionId);
+
+      // Resolve question translation
+      const qTrans = !isEnglish
+        ? q.translations.find(
+            (t) =>
+              t.languageId === targetLangId ||
+              t.languageCode?.toLowerCase() === targetLangCode,
+          ) ||
+          masterQ?.translations.find(
+            (t) =>
+              t.languageId === targetLangId ||
+              (t as any).languageCode?.toLowerCase() === targetLangCode,
+          )
+        : null;
+
+      // Passage
+      const rawPassageContent = !isEnglish
+        ? (qTrans as any)?.passageContent || qTrans?.passageText || (q as any).passageContent || q.passage
+        : (q as any).passageContent || q.passage || masterQ?.passageContent || masterQ?.passage;
+      const passageHtml = rawPassageContent
+        ? `<div class="passage-box"><div class="passage-header">Passage / Comprehension</div>${this.serializeRichDocToHtml(rawPassageContent, q.passage || '')}</div>`
+        : '';
+
+      // Assertion & Reason
+      const rawAssertionContent = !isEnglish
+        ? (qTrans as any)?.assertionContent || (qTrans as any)?.assertionText || (q as any).assertionContent || q.assertion
+        : (q as any).assertionContent || q.assertion;
+      const rawReasonContent = !isEnglish
+        ? (qTrans as any)?.reasonContent || (qTrans as any)?.reasonText || (q as any).reasonContent || q.reason
+        : (q as any).reasonContent || q.reason;
+
+      let assertionReasonHtml = '';
+      if (rawAssertionContent || rawReasonContent) {
+        assertionReasonHtml = `
+          <div class="assertion-reason-box">
+            ${rawAssertionContent ? `<div class="assertion-row"><strong>Assertion (A):</strong> ${this.serializeRichDocToHtml(rawAssertionContent, q.assertion || '')}</div>` : ''}
+            ${rawReasonContent ? `<div class="reason-row"><strong>Reason (R):</strong> ${this.serializeRichDocToHtml(rawReasonContent, q.reason || '')}</div>` : ''}
+          </div>
+        `;
+      }
+
+      // Question Statement
+      const rawQuestionContent = !isEnglish
+        ? (qTrans as any)?.questionContent || qTrans?.questionText || (q as any).questionContent || q.questionText
+        : (q as any).questionContent || q.questionText || masterQ?.questionContent;
+      const questionTextHtml = this.serializeRichDocToHtml(rawQuestionContent, q.questionText);
+
+      // Options
+      const optionsHtml = q.options.map((opt) => {
+        const optKey = opt.optionKey || opt.optionLabel || 'A';
+        const masterOpt = masterQ?.options.find((o) => o.optionKey === optKey);
+
+        const optTrans = !isEnglish
+          ? opt.translations.find(
+              (ot) =>
+                ot.languageId === targetLangId ||
+                ot.languageCode?.toLowerCase() === targetLangCode,
+            ) ||
+            masterOpt?.translations.find((ot) => ot.languageId === targetLangId)
+          : null;
+
+        const rawOptContent = !isEnglish
+          ? (optTrans as any)?.optionContent ||
+            (optTrans?.optionText && optTrans.optionText !== '[Image]' && !optTrans.optionText.includes('[Image]')
+              ? optTrans.optionText
+              : (opt as any).optionContent || opt.optionText)
+          : (opt as any).optionContent || opt.optionText || (masterOpt as any)?.optionContent;
+
+        const optContentHtml = this.serializeRichDocToHtml(rawOptContent, opt.optionText || '');
+
+        return `
+          <div class="option-item">
+            <span class="option-key">(${optKey})</span>
+            <div class="option-content">${optContentHtml}</div>
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <div class="question-card" id="q-${seq}">
+          <div class="question-card-header">
+            <div class="q-seq-badge">Question ${seq}</div>
+            <div class="q-meta-badges">
+              ${q.subjectName ? `<span class="q-badge subject-badge">${q.subjectName}</span>` : ''}
+              ${q.sectionName ? `<span class="q-badge section-badge">${q.sectionName}</span>` : ''}
+              <span class="q-badge marks-badge">+${q.marks || 4} / -${q.negativeMarks || 1}</span>
+            </div>
+          </div>
+          ${passageHtml}
+          ${assertionReasonHtml}
+          <div class="question-body">
+            ${questionTextHtml}
+          </div>
+          <div class="options-grid">
+            ${optionsHtml}
+          </div>
+        </div>
+      `;
+    }).join('\n');
+
+    // 5. Complete Standalone HTML Document
+    return `<!DOCTYPE html>
+<html lang="${targetLangCode}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${examTitle} - ${targetLangName} Question Paper</title>
+  <!-- KaTeX for crisp LaTeX formulas -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"></script>
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Noto Sans Devanagari", "Noto Sans Gujarati", "Noto Sans Telugu", "Noto Sans Tamil", "Noto Sans Kannada", "Noto Sans Malayalam", "Noto Sans Bengali", sans-serif;
+      color: #0f172a;
+      background-color: #f8fafc;
+      font-size: 14px;
+      line-height: 1.6;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    /* Screen Action Bar */
+    .screen-action-bar {
+      position: sticky;
+      top: 0;
+      z-index: 999;
+      background: #1e293b;
+      color: #ffffff;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+    .action-bar-title {
+      font-size: 15px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .lang-pill {
+      background: #4f46e5;
+      color: #ffffff;
+      padding: 3px 10px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .action-buttons {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn-primary {
+      background: #4f46e5;
+      color: #ffffff;
+    }
+    .btn-primary:hover {
+      background: #4338ca;
+    }
+    .btn-secondary {
+      background: #334155;
+      color: #f1f5f9;
+    }
+    .btn-secondary:hover {
+      background: #475569;
+    }
+
+    /* Printable Page Container */
+    .paper-container {
+      max-width: 860px;
+      margin: 24px auto;
+      background: #ffffff;
+      padding: 40px;
+      border-radius: 12px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+    }
+
+    /* Official Exam Header */
+    .exam-header {
+      border-bottom: 2px solid #0f172a;
+      padding-bottom: 16px;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+    .exam-main-title {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: #0f172a;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .exam-sub-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #475569;
+      margin-bottom: 12px;
+    }
+    .exam-meta-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      background: #f1f5f9;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 12px;
+      text-align: left;
+    }
+    .meta-item strong {
+      display: block;
+      color: #64748b;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .meta-item span {
+      font-weight: 700;
+      color: #0f172a;
+    }
+
+    /* Instructions Box */
+    .instructions-card {
+      border: 1px solid #e2e8f0;
+      background: #f8fafc;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 24px;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .instructions-card h4 {
+      font-weight: 700;
+      color: #1e293b;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.05em;
+    }
+    .instructions-card ul {
+      padding-left: 18px;
+      color: #334155;
+    }
+
+    /* Question Cards */
+    .question-card {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 18px;
+      margin-bottom: 20px;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    .question-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px dashed #e2e8f0;
+      padding-bottom: 10px;
+      margin-bottom: 12px;
+    }
+    .q-seq-badge {
+      font-weight: 800;
+      font-size: 14px;
+      color: #4f46e5;
+    }
+    .q-meta-badges {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .q-badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: #f1f5f9;
+      color: #475569;
+    }
+    .marks-badge {
+      background: #ecfdf5;
+      color: #059669;
+      border: 1px solid #a7f3d0;
+    }
+
+    /* Passage & Assertion Boxes */
+    .passage-box {
+      background: #f8fafc;
+      border-left: 3px solid #4f46e5;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      border-radius: 0 6px 6px 0;
+      font-size: 13px;
+    }
+    .passage-header {
+      font-weight: 700;
+      color: #4f46e5;
+      font-size: 11px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .assertion-reason-box {
+      background: #faf5ff;
+      border: 1px solid #e9d5ff;
+      border-radius: 6px;
+      padding: 10px 14px;
+      margin-bottom: 12px;
+      font-size: 13px;
+    }
+    .assertion-row, .reason-row {
+      margin-bottom: 4px;
+    }
+
+    /* Question Statement */
+    .question-body {
+      font-size: 14px;
+      font-weight: 500;
+      color: #0f172a;
+      line-height: 1.6;
+      margin-bottom: 14px;
+    }
+    .diagram-wrapper {
+      margin: 12px 0;
+      text-align: center;
+    }
+    .diagram-img {
+      max-width: 100%;
+      max-height: 260px;
+      height: auto;
+      border-radius: 6px;
+      border: 1px solid #e2e8f0;
+      object-contain: contain;
+    }
+    .diagram-caption {
+      font-size: 11px;
+      color: #64748b;
+      margin-top: 4px;
+      font-style: italic;
+    }
+
+    /* Options Grid */
+    .options-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .option-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 10px 12px;
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .option-key {
+      font-weight: 800;
+      color: #334155;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .option-content {
+      flex: 1;
+      color: #1e293b;
+      word-break: break-word;
+    }
+    .option-content img {
+      max-width: 100%;
+      max-height: 160px;
+      height: auto;
+      border-radius: 4px;
+    }
+
+    /* Print Specific Media Styles */
+    @media print {
+      body {
+        background-color: #ffffff !important;
+        font-size: 12pt;
+      }
+      .no-print, .screen-action-bar {
+        display: none !important;
+      }
+      .paper-container {
+        max-width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+      }
+      .question-card {
+        border: 1px solid #cbd5e1 !important;
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+        margin-bottom: 16px !important;
+        padding: 14px !important;
+      }
+      .options-grid {
+        gap: 8px !important;
+      }
+      @page {
+        size: A4 portrait;
+        margin: 15mm 15mm 20mm 15mm;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Floating Screen Action Bar (Hidden in Print) -->
+  <div class="screen-action-bar no-print">
+    <div class="action-bar-title">
+      <span>Question Paper Preview</span>
+      <span class="lang-pill">${targetLangName}</span>
+      <span style="font-size: 12px; color: #94a3b8; font-weight: normal;">• ${totalQuestions} Questions</span>
+    </div>
+    <div class="action-buttons">
+      <button class="btn btn-primary" onclick="window.print()">
+        <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+        </svg>
+        Print Whole Paper
+      </button>
+      <button class="btn btn-secondary" onclick="window.close()">Close</button>
+    </div>
+  </div>
+
+  <!-- Printable Paper Body -->
+  <div class="paper-container">
+    <!-- Header -->
+    <header class="exam-header">
+      <h1 class="exam-main-title">${examTitle}</h1>
+      ${examTargetName ? `<div class="exam-sub-title">${examTargetName} ${examCode ? `(${examCode})` : ''}</div>` : ''}
+      <div class="exam-meta-grid">
+        <div class="meta-item">
+          <strong>Language</strong>
+          <span>${targetLangName}</span>
+        </div>
+        <div class="meta-item">
+          <strong>Total Questions</strong>
+          <span>${totalQuestions}</span>
+        </div>
+        <div class="meta-item">
+          <strong>Duration</strong>
+          <span>${durationMinutes} Mins</span>
+        </div>
+        <div class="meta-item">
+          <strong>Max Marks</strong>
+          <span>${totalMarks}</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- General Instructions -->
+    <div class="instructions-card">
+      <h4>General Instructions:</h4>
+      <ul>
+        <li>This paper contains <strong>${totalQuestions}</strong> questions in <strong>${targetLangName}</strong>.</li>
+        <li>All questions are compulsory unless specified otherwise.</li>
+        <li>Each question has four options (A, B, C, D). Choose the most appropriate single response.</li>
+        <li>Correct answers earn <strong>+4 marks</strong>; incorrect answers incur <strong>-1 mark</strong> penalty.</li>
+      </ul>
+    </div>
+
+    <!-- Full Questions List -->
+    <main class="questions-list">
+      ${questionCardsHtml}
+    </main>
+  </div>
+
+  <script>
+    // Automatically render Math / LaTeX expressions
+    document.addEventListener("DOMContentLoaded", function() {
+      if (window.renderMathInElement) {
+        renderMathInElement(document.body, {
+          delimiters: [
+            {left: "$$", right: "$$", display: true},
+            {left: "$", right: "$", display: false},
+            {left: "\\(", right: "\\)", display: false},
+            {left: "\\[", right: "\\]", display: true}
+          ],
+          throwOnError: false
+        });
+      }
+    });
+  </script>
+</body>
+</html>`;
+  }
+
 }

@@ -65,7 +65,7 @@ const prismaMock = {
     ),
   },
   examSecurityProfile: { findUnique: jest.fn().mockResolvedValue(null) },
-  examLanguage: { count: jest.fn().mockResolvedValue(0), findFirst: jest.fn() },
+  examLanguage: { count: jest.fn().mockResolvedValue(0), findFirst: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
   $transaction: jest.fn((cb) => cb(prismaMock)),
 };
 
@@ -505,6 +505,143 @@ describe('ExamAttemptService', () => {
       expect(res.language?.code).toBe('hi');
       expect(res.language?.name).toBe('Hindi');
       expect(res.answers).toHaveLength(1);
+    });
+  });
+  describe('Multilingual Single-Language Purity & Fallbacks', () => {
+    it('guarantees English attempt receives clean English options even when regional translations exist', async () => {
+      const mockAttempt = {
+        id: 'att-en-123',
+        examId: 'exam-123',
+        examVersionId: 'ver-123',
+        studentId: 'stud-123',
+        languageId: 'lang-en-uuid',
+        displayLanguageId: 'lang-en-uuid',
+        language: {
+          id: 'lang-en-uuid',
+          code: 'en',
+          name: 'English',
+        },
+        status: { id: 'status-1', name: 'IN_PROGRESS' },
+        student: { id: 'stud-123', userId: 'user-123' },
+      };
+
+      prismaMock.attempt.findUnique.mockResolvedValue(mockAttempt);
+      prismaMock.attemptQuestion.count.mockResolvedValue(1);
+      prismaMock.attemptQuestion.findMany.mockResolvedValue([
+        {
+          id: 'aq-1',
+          examQuestionId: 'eq-1',
+          displayOrder: 1,
+          options: [
+            { id: 'aqo-1', examQuestionOptionId: 'opt-1', displayOrder: 1 },
+          ],
+          examQuestion: {
+            id: 'eq-1',
+            displayOrder: 1,
+            marks: 4,
+            negativeMarks: 1,
+            section: { name: 'Physics' },
+            question: {
+              id: 'q-1',
+              type: 'SINGLE_CORRECT',
+              questionType: { code: 'SINGLE_CORRECT' },
+              questionText: 'What is acceleration due to gravity?',
+              defaultLanguageId: 'lang-en-uuid',
+              translations: [
+                { languageId: 'lang-en-uuid', languageCode: 'en', questionText: 'What is acceleration due to gravity?' },
+                { languageId: 'lang-te-uuid', languageCode: 'te', questionText: 'గురుత్వాకర్షణ త్వరణం ఎంత?' },
+              ],
+              options: [
+                {
+                  id: 'opt-1',
+                  optionKey: 'A',
+                  optionLabel: 'A',
+                  optionText: '9.8 m/s^2',
+                  translations: [
+                    { languageId: 'lang-te-uuid', languageCode: 'te', optionText: '9.8 మీ/సె^2' },
+                    { languageId: 'lang-kn-uuid', languageCode: 'kn', optionText: '9.8 ಮೀ/ಸೆ^2' },
+                    { languageId: 'lang-en-uuid', languageCode: 'en', optionText: '9.8 m/s^2' },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      ]);
+
+      const res: any = await service.getAttemptQuestions('att-en-123', 'stud-123');
+      expect(res).toHaveLength(1);
+      expect(res[0].questionText).toBe('What is acceleration due to gravity?');
+      expect(res[0].options[0].optionText).toBe('9.8 m/s^2');
+      expect(res[0].options[0].translations['en'].optionText).toBe('9.8 m/s^2');
+    });
+
+    it('guarantees Gujarati attempt falls back cleanly to English master text without Hindi or Marathi leakage when Gujarati is missing', async () => {
+      const mockAttempt = {
+        id: 'att-gu-123',
+        examId: 'exam-123',
+        examVersionId: 'ver-123',
+        studentId: 'stud-123',
+        languageId: 'lang-gu-uuid',
+        displayLanguageId: 'lang-gu-uuid',
+        language: {
+          id: 'lang-gu-uuid',
+          code: 'gu',
+          name: 'Gujarati',
+        },
+        status: { id: 'status-1', name: 'IN_PROGRESS' },
+        student: { id: 'stud-123', userId: 'user-123' },
+      };
+
+      prismaMock.attempt.findUnique.mockResolvedValue(mockAttempt);
+      prismaMock.attemptQuestion.count.mockResolvedValue(1);
+      prismaMock.attemptQuestion.findMany.mockResolvedValue([
+        {
+          id: 'aq-2',
+          examQuestionId: 'eq-2',
+          displayOrder: 1,
+          options: [
+            { id: 'aqo-2', examQuestionOptionId: 'opt-2', displayOrder: 1 },
+          ],
+          examQuestion: {
+            id: 'eq-2',
+            displayOrder: 1,
+            marks: 4,
+            negativeMarks: 1,
+            section: { name: 'Chemistry' },
+            question: {
+              id: 'q-2',
+              type: 'SINGLE_CORRECT',
+              questionType: { code: 'SINGLE_CORRECT' },
+              questionText: 'Which gas is evolved?',
+              defaultLanguageId: 'lang-en-uuid',
+              translations: [
+                { languageId: 'lang-mr-uuid', languageCode: 'mr', questionText: 'कोणता वायू बाहेर पडतो?' },
+                { languageId: 'lang-hi-uuid', languageCode: 'hi', questionText: 'कौन सी गैस निकलती है?' },
+                { languageId: 'lang-en-uuid', languageCode: 'en', questionText: 'Which gas is evolved?' },
+              ],
+              options: [
+                {
+                  id: 'opt-2',
+                  optionKey: 'A',
+                  optionLabel: 'A',
+                  optionText: 'Hydrogen',
+                  translations: [
+                    { languageId: 'lang-mr-uuid', languageCode: 'mr', optionText: 'हायड्रोजन' },
+                    { languageId: 'lang-hi-uuid', languageCode: 'hi', optionText: 'हाइड्रोजन' },
+                    { languageId: 'lang-en-uuid', languageCode: 'en', optionText: 'Hydrogen' },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      ]);
+
+      const res: any = await service.getAttemptQuestions('att-gu-123', 'stud-123');
+      expect(res).toHaveLength(1);
+      expect(res[0].questionText).toBe('Which gas is evolved?');
+      expect(res[0].options[0].optionText).toBe('Hydrogen');
     });
   });
 });

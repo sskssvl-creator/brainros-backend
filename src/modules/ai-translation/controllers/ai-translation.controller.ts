@@ -4,6 +4,7 @@ import {
   Post,
   Body,
   Param,
+  Query,
   UseGuards,
   UseInterceptors,
   UploadedFile,
@@ -79,6 +80,26 @@ export class AiTranslationController {
   @Get('jobs/:jobId/questions')
   async getJobQuestions(@Param('jobId', ParseUUIDPipe) jobId: string) {
     return this.aiTranslationService.getJobQuestions(jobId);
+  }
+
+  /**
+   * GET /api/ai-translations/jobs/:jobId/print
+   * Render complete multi-page printable question paper HTML for the selected language
+   */
+  @Get('jobs/:jobId/print')
+  async printJobQuestions(
+    @Param('jobId', ParseUUIDPipe) jobId: string,
+    @Query('languageId') languageId: string | undefined,
+    @Query('languageCode') languageCode: string | undefined,
+    @Res() res: Response,
+  ) {
+    const html = await this.aiTranslationService.generatePrintableQuestionPaperHtml(
+      jobId,
+      languageId,
+      languageCode,
+    );
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(html);
   }
 
   /**

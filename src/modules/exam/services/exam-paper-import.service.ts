@@ -684,7 +684,7 @@ export class ExamPaperImportService {
 
         for (let oIdx = 0; oIdx < tuple.options.length; oIdx++) {
           const opt = tuple.options[oIdx];
-          await tx.examVersionOption.create({
+          const evOpt = await tx.examVersionOption.create({
             data: {
               examVersionQuestionId: vq.id,
               sourceOptionId: opt.id,
@@ -695,6 +695,16 @@ export class ExamPaperImportService {
               isCorrect: opt.isCorrect,
             },
           });
+          if (defaultLang) {
+            await tx.examVersionOptionTranslation.create({
+              data: {
+                examVersionOptionId: evOpt.id,
+                languageId: defaultLang.id,
+                languageCode: defaultLang.code || 'en',
+                optionText: opt.optionText || '',
+              },
+            });
+          }
         }
       }
 
@@ -1963,6 +1973,9 @@ export class ExamPaperImportService {
       }
 
       // 3. Create Sections and ExamQuestions
+      const defaultLang = await tx.preferredLanguage.findFirst({
+        where: { code: 'en' },
+      });
       let secOrder = 1;
       let globalQOrder = 1;
       const createdQuestionTuples: Array<{
@@ -2209,7 +2222,7 @@ export class ExamPaperImportService {
 
         for (let oIdx = 0; oIdx < tuple.options.length; oIdx++) {
           const opt = tuple.options[oIdx];
-          await tx.examVersionOption.create({
+          const evOpt = await tx.examVersionOption.create({
             data: {
               examVersionQuestionId: vq.id,
               sourceOptionId: opt.id,
@@ -2220,6 +2233,16 @@ export class ExamPaperImportService {
               isCorrect: opt.isCorrect,
             },
           });
+          if (defaultLang) {
+            await tx.examVersionOptionTranslation.create({
+              data: {
+                examVersionOptionId: evOpt.id,
+                languageId: defaultLang.id,
+                languageCode: defaultLang.code || 'en',
+                optionText: opt.optionText || '',
+              },
+            });
+          }
         }
       }
 

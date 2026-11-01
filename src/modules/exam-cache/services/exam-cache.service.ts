@@ -136,6 +136,7 @@ export class ExamCacheService {
       orderBy: { sequenceNumber: 'asc' },
     });
 
+    const defaultLangId = version.exam.languages?.find((l: any) => l.isDefault)?.languageId;
     const snapshotQuestions: ExamQuestionSnapshotItem[] = [];
     const snapshotQuestionsById: Record<string, ExamQuestionSnapshotItem> = {};
 
@@ -176,6 +177,18 @@ export class ExamCacheService {
             qTranslationsMap[tr.languageCode.toLowerCase()] = transData;
           }
         }
+        if (!qTranslationsMap['en']) {
+          qTranslationsMap['en'] = {
+            questionText: vq.questionText || '',
+            questionContent: (vq as any).questionContent || null,
+            passageText: vq.passage || null,
+            passageContent: (vq as any).passageContent || null,
+            assertionText: vq.assertion || null,
+            assertionContent: (vq as any).assertionContent || null,
+            reasonText: vq.reason || null,
+            reasonContent: (vq as any).reasonContent || null,
+          };
+        }
 
         // Build options array & optionsById
         const optionsList: ExamOptionSnapshotItem[] = [];
@@ -194,6 +207,12 @@ export class ExamCacheService {
             if (ot.languageCode) {
               optTranslationsMap[ot.languageCode.toLowerCase()] = optTransData;
             }
+          }
+          if (!optTranslationsMap['en']) {
+            optTranslationsMap['en'] = {
+              optionText: vo.optionText || vo.optionLabel || '',
+              optionContent: (vo as any).optionContent || null,
+            };
           }
 
           const optItem: ExamOptionSnapshotItem = {
@@ -283,6 +302,14 @@ export class ExamCacheService {
             }
           }
         }
+        if (!qTranslationsMap['en']) {
+          qTranslationsMap['en'] = {
+            questionText: (q as any).questionText || q.passage || '',
+            passageText: q.passage || null,
+            assertionText: q.assertion || null,
+            reasonText: q.reason || null,
+          };
+        }
 
         const optionsList: ExamOptionSnapshotItem[] = [];
         const optionsById: Record<string, ExamOptionSnapshotItem> = {};
@@ -302,6 +329,12 @@ export class ExamCacheService {
                 }
               }
             }
+            if (!optTranslationsMap['en']) {
+              optTranslationsMap['en'] = {
+                optionText: opt.optionText || opt.optionLabel || '',
+                optionContent: (opt as any).optionContent || null,
+              };
+            }
 
             const optItem: ExamOptionSnapshotItem = {
               id: opt.id,
@@ -320,8 +353,11 @@ export class ExamCacheService {
           }
         }
 
-        const defaultTrans = q.translations?.[0];
-        const defaultQuestionText = defaultTrans?.questionText || '';
+        const defaultTrans =
+          (defaultLangId ? q.translations?.find((t: any) => t.languageId === defaultLangId) : null) ||
+          q.translations?.find((t: any) => t.language?.code?.toLowerCase() === 'en') ||
+          (q.defaultLanguageId ? q.translations?.find((t: any) => t.languageId === q.defaultLanguageId) : null);
+        const defaultQuestionText = defaultTrans?.questionText || (q as any).questionText || q.passage || '';
 
         const questionItem: ExamQuestionSnapshotItem = {
           examQuestionId,

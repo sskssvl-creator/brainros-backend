@@ -954,15 +954,26 @@ export class ExamService {
       // 2. Exam Default Language
       // 3. Question Default Language
       // 4. First Available Translation
+      const targetLang = (languageId || 'en').toLowerCase();
       const matchedTranslation =
         q.translations.find(
-          (t) => t.languageId === languageId || t.language?.code === languageId,
+          (t) =>
+            t.languageId === languageId ||
+            t.language?.code?.toLowerCase() === targetLang ||
+            (t as any).languageCode?.toLowerCase() === targetLang,
         ) ||
         (examDefaultLanguageId
           ? q.translations.find((t) => t.languageId === examDefaultLanguageId)
           : null) ||
-        q.translations.find((t) => t.languageId === q.defaultLanguageId) ||
-        q.translations[0];
+        (q.defaultLanguageId
+          ? q.translations.find((t) => t.languageId === q.defaultLanguageId)
+          : null) ||
+        q.translations.find(
+          (t) =>
+            t.language?.code?.toLowerCase() === 'en' ||
+            (t as any).languageCode?.toLowerCase() === 'en',
+        ) ||
+        null;
 
       // Build question translations map for instant client-side switching (indexed by ID & code)
       const qTranslationsMap: Record<
@@ -986,6 +997,14 @@ export class ExamService {
           qTranslationsMap[t.language.code.toLowerCase()] = transObj;
         }
       });
+      if (!qTranslationsMap['en']) {
+        qTranslationsMap['en'] = {
+          questionText: (q as any).questionText || q.passage || '',
+          passageText: q.passage || null,
+          assertionText: q.assertion || null,
+          reasonText: q.reason || null,
+        };
+      }
 
       return {
         examQuestionId: eq.id,
@@ -1008,17 +1027,25 @@ export class ExamService {
             o.translations?.find(
               (ot) =>
                 ot.languageId === languageId ||
-                ot.language?.code === languageId,
+                ot.language?.code?.toLowerCase() === targetLang ||
+                (ot as any).languageCode?.toLowerCase() === targetLang,
             ) ||
             (examDefaultLanguageId
               ? o.translations?.find(
                   (ot) => ot.languageId === examDefaultLanguageId,
                 )
               : null) ||
+            (q.defaultLanguageId
+              ? o.translations?.find(
+                  (ot) => ot.languageId === q.defaultLanguageId,
+                )
+              : null) ||
             o.translations?.find(
-              (ot) => ot.languageId === q.defaultLanguageId,
+              (ot) =>
+                ot.language?.code?.toLowerCase() === 'en' ||
+                (ot as any).languageCode?.toLowerCase() === 'en',
             ) ||
-            o.translations?.[0];
+            null;
 
           const optTranslationsMap: Record<string, { optionText: string }> = {};
           (o.translations || []).forEach((ot) => {
@@ -1030,6 +1057,11 @@ export class ExamService {
               optTranslationsMap[ot.language.code.toLowerCase()] = optTransObj;
             }
           });
+          if (!optTranslationsMap['en']) {
+            optTranslationsMap['en'] = {
+              optionText: o.optionText || o.optionLabel || '',
+            };
+          }
 
           return {
             id: o.id,
@@ -1854,9 +1886,18 @@ export class ExamService {
         },
       });
 
+      const defaultLanguage =
+        (await tx.preferredLanguage.findFirst({ where: { code: 'en' } })) ||
+        (await tx.preferredLanguage.findFirst());
+      const defaultLangId = defaultLanguage?.id || null;
+
       let vSeq = 1;
       for (const q of orderedQuestions) {
-        const defaultTrans = q.translations?.[0];
+        const defaultTrans =
+          (defaultLangId ? q.translations?.find((t: any) => t.languageId === defaultLangId) : null) ||
+          q.translations?.find((t: any) => t.language?.code?.toLowerCase() === 'en') ||
+          (q.defaultLanguageId ? q.translations?.find((t: any) => t.languageId === q.defaultLanguageId) : null);
+
         const vQuestion = await tx.examVersionQuestion.create({
           data: {
             examVersionId: examVersion.id,
@@ -1876,6 +1917,7 @@ export class ExamService {
             reasonContent: defaultTrans?.reasonContent || (q as any).reasonContent || undefined,
             questionText:
               defaultTrans?.questionText ||
+              (q as any).questionText ||
               q.passage ||
               'Question statement',
             questionContent: defaultTrans?.questionContent || (q as any).questionContent || undefined,
@@ -1885,10 +1927,31 @@ export class ExamService {
           },
         });
 
+        if (defaultLangId) {
+          await tx.examVersionTranslation.create({
+            data: {
+              examVersionQuestionId: vQuestion.id,
+              languageId: defaultLangId,
+              languageCode: 'en',
+              questionText: defaultTrans?.questionText || (q as any).questionText || 'Question statement',
+              questionContent: defaultTrans?.questionContent || (q as any).questionContent || undefined,
+              passageText: defaultTrans?.passageText || q.passage || null,
+              passageContent: defaultTrans?.passageContent || (q as any).passageContent || undefined,
+              assertionText: defaultTrans?.assertionText || q.assertion || null,
+              assertionContent: defaultTrans?.assertionContent || (q as any).assertionContent || undefined,
+              reasonText: defaultTrans?.reasonText || q.reason || null,
+              reasonContent: defaultTrans?.reasonContent || (q as any).reasonContent || undefined,
+              explanation: defaultTrans?.explanation || null,
+            },
+          });
+        }
+
         for (let optIdx = 0; optIdx < (q.options || []).length; optIdx++) {
           const opt = q.options[optIdx];
-          const optTrans = opt.translations?.[0];
-          await tx.examVersionOption.create({
+          const optTrans =
+            (defaultLangId ? opt.translations?.find((t: any) => t.languageId === defaultLangId) : null) ||
+            opt.translations?.find((t: any) => t.language?.code?.toLowerCase() === 'en');
+          const evOpt = await tx.examVersionOption.create({
             data: {
               examVersionQuestionId: vQuestion.id,
               sourceOptionId: opt.id,
@@ -1900,6 +1963,17 @@ export class ExamService {
               isCorrect: opt.isCorrect,
             },
           });
+          if (defaultLangId) {
+            await tx.examVersionOptionTranslation.create({
+              data: {
+                examVersionOptionId: evOpt.id,
+                languageId: defaultLangId,
+                languageCode: 'en',
+                optionText: optTrans?.optionText || opt.optionText || '',
+                optionContent: optTrans?.optionContent || (opt as any).optionContent || undefined,
+              },
+            });
+          }
         }
       }
 

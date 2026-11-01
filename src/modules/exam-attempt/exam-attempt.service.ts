@@ -1061,13 +1061,16 @@ export class ExamAttemptService {
 
               if (!qItem) return null;
 
-              // Translation resolution with fallback
+              const currentLanguageCode = (attempt as any).language?.code?.toLowerCase() || 'en';
+              // Translation resolution with strict fallback
               const matchedTranslation =
                 qItem.translations[currentLanguageId] ||
                 qItem.translations[currentLanguageId.toLowerCase()] ||
                 qItem.translations[currentLanguageId.toUpperCase()] ||
+                (currentLanguageCode ? qItem.translations[currentLanguageCode] : null) ||
                 (defaultLangId ? qItem.translations[defaultLangId] : null) ||
-                Object.values(qItem.translations)[0];
+                qItem.translations['en'] ||
+                null;
 
               let orderedOptions = aq.options
                 .map((aqo) => {
@@ -1078,7 +1081,10 @@ export class ExamAttemptService {
                     optItem.translations?.[currentLanguageId] ||
                     optItem.translations?.[currentLanguageId.toLowerCase()] ||
                     optItem.translations?.[currentLanguageId.toUpperCase()] ||
-                    (defaultLangId ? optItem.translations?.[defaultLangId] : null);
+                    (currentLanguageCode ? optItem.translations?.[currentLanguageCode] : null) ||
+                    (defaultLangId ? optItem.translations?.[defaultLangId] : null) ||
+                    optItem.translations?.['en'] ||
+                    null;
 
                   const matchedOptText =
                     optTrans?.optionText ||
@@ -1218,21 +1224,31 @@ export class ExamAttemptService {
         const q = eq.question;
 
         // 4-Tier Translation Fallback:
-        // 1. Attempt Language
+        const currentLanguageCode = (attempt as any).language?.code?.toLowerCase() || 'en';
+        // 4-Tier Fallback:
+        // 1. Attempt Language (ID or Code)
         // 2. Exam Default Language
         // 3. Question Default Language
-        // 4. First Available Translation
+        // 4. English Master Translation
         const matchedTranslation =
           q.translations.find(
             (t) =>
               t.languageId === currentLanguageId ||
-              t.language?.code?.toLowerCase() === currentLanguageId.toLowerCase(),
+              t.language?.code?.toLowerCase() === currentLanguageCode ||
+              (t as any).languageCode?.toLowerCase() === currentLanguageCode,
           ) ||
           (examDefaultLanguageId
             ? q.translations.find((t) => t.languageId === examDefaultLanguageId)
             : null) ||
-          q.translations.find((t) => t.languageId === q.defaultLanguageId) ||
-          q.translations[0];
+          (q.defaultLanguageId
+            ? q.translations.find((t) => t.languageId === q.defaultLanguageId)
+            : null) ||
+          q.translations.find(
+            (t) =>
+              t.language?.code?.toLowerCase() === 'en' ||
+              (t as any).languageCode?.toLowerCase() === 'en',
+          ) ||
+          null;
 
         // Build question translations map for instant client-side switching (indexed by ID & code)
         const qTranslationsMap: Record<
@@ -1264,6 +1280,18 @@ export class ExamAttemptService {
             qTranslationsMap[t.language.code.toLowerCase()] = transObj;
           }
         });
+        if (!qTranslationsMap['en']) {
+          qTranslationsMap['en'] = {
+            questionText: (q as any).questionText || q.passage || '',
+            questionContent: (q as any).questionContent || null,
+            passageText: q.passage || null,
+            passageContent: (q as any).passageContent || null,
+            assertionText: q.assertion || null,
+            assertionContent: (q as any).assertionContent || null,
+            reasonText: q.reason || null,
+            reasonContent: (q as any).reasonContent || null,
+          };
+        }
 
         // Map options strictly according to AttemptQuestionOption.displayOrder
         const rawOptionsMap = new Map<string, any>(
@@ -1278,17 +1306,25 @@ export class ExamAttemptService {
               rawOpt.translations?.find(
                 (ot: any) =>
                   ot.languageId === currentLanguageId ||
-                  ot.language?.code?.toLowerCase() === currentLanguageId.toLowerCase(),
+                  ot.language?.code?.toLowerCase() === currentLanguageCode ||
+                  ot.languageCode?.toLowerCase() === currentLanguageCode,
               ) ||
               (examDefaultLanguageId
                 ? rawOpt.translations?.find(
                     (ot: any) => ot.languageId === examDefaultLanguageId,
                   )
                 : null) ||
+              (q.defaultLanguageId
+                ? rawOpt.translations?.find(
+                    (ot: any) => ot.languageId === q.defaultLanguageId,
+                  )
+                : null) ||
               rawOpt.translations?.find(
-                (ot: any) => ot.languageId === q.defaultLanguageId,
+                (ot: any) =>
+                  ot.language?.code?.toLowerCase() === 'en' ||
+                  ot.languageCode?.toLowerCase() === 'en',
               ) ||
-              rawOpt.translations?.[0];
+              null;
 
             const optTranslationsMap: Record<string, { optionText: string; optionContent?: any }> = {};
             (rawOpt.translations || []).forEach((ot: any) => {
@@ -1302,6 +1338,12 @@ export class ExamAttemptService {
                 optTranslationsMap[ot.language.code.toLowerCase()] = optTransObj;
               }
             });
+            if (!optTranslationsMap['en']) {
+              optTranslationsMap['en'] = {
+                optionText: rawOpt.optionText || rawOpt.optionLabel || '',
+                optionContent: (rawOpt as any).optionContent || null,
+              };
+            }
 
             return {
               id: rawOpt.id,
@@ -1330,17 +1372,25 @@ export class ExamAttemptService {
               rawOpt.translations?.find(
                 (ot: any) =>
                   ot.languageId === currentLanguageId ||
-                  ot.language?.code?.toLowerCase() === currentLanguageId.toLowerCase(),
+                  ot.language?.code?.toLowerCase() === currentLanguageCode ||
+                  ot.languageCode?.toLowerCase() === currentLanguageCode,
               ) ||
               (examDefaultLanguageId
                 ? rawOpt.translations?.find(
                     (ot: any) => ot.languageId === examDefaultLanguageId,
                   )
                 : null) ||
+              (q.defaultLanguageId
+                ? rawOpt.translations?.find(
+                    (ot: any) => ot.languageId === q.defaultLanguageId,
+                  )
+                : null) ||
               rawOpt.translations?.find(
-                (ot: any) => ot.languageId === q.defaultLanguageId,
+                (ot: any) =>
+                  ot.language?.code?.toLowerCase() === 'en' ||
+                  ot.languageCode?.toLowerCase() === 'en',
               ) ||
-              rawOpt.translations?.[0];
+              null;
 
             const optTranslationsMap: Record<string, { optionText: string; optionContent?: any }> = {};
             (rawOpt.translations || []).forEach((ot: any) => {
@@ -1354,6 +1404,12 @@ export class ExamAttemptService {
                 optTranslationsMap[ot.language.code.toLowerCase()] = optTransObj;
               }
             });
+            if (!optTranslationsMap['en']) {
+              optTranslationsMap['en'] = {
+                optionText: rawOpt.optionText || rawOpt.optionLabel || '',
+                optionContent: (rawOpt as any).optionContent || null,
+              };
+            }
 
             return {
               id: rawOpt.id,
