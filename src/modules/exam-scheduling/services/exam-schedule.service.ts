@@ -545,25 +545,44 @@ export class ExamScheduleService {
 
     const examTypeUpper = (dto.examType || '').toUpperCase();
 
-    // Resolve Target ID if target name was provided (e.g. JEE, NEET, CET)
-    if (dto.examTargetName) {
+    // Resolve Target ID: For FULL_EXAM or when target name is provided, resolve strictly by target name first
+    if (dto.examTargetName || examTypeUpper === 'FULL_EXAM') {
+      const targetQueryName = dto.examTargetName?.trim() || (examTypeUpper === 'FULL_EXAM' ? 'NEET' : examTypeUpper);
       const matched = await this.prisma.examTarget.findFirst({
-        where: { name: { contains: dto.examTargetName, mode: 'insensitive' } },
+        where: {
+          OR: [
+            { name: { equals: targetQueryName, mode: 'insensitive' } },
+            { name: { contains: targetQueryName, mode: 'insensitive' } },
+          ],
+        },
+        orderBy: { name: 'asc' },
       });
       if (matched) {
         examTargetId = matched.id;
         targetName = matched.name;
+      }
+    } else if (examTargetId) {
+      const existingTarget = await this.prisma.examTarget.findUnique({
+        where: { id: examTargetId },
+      });
+      if (existingTarget) {
+        targetName = existingTarget.name;
       }
     }
 
     const resolvedSubjects: any[] = [];
     const resolvedSubjectGroups: { subject: any; chapters: any[]; questionCount?: number }[] = [];
 
-    // Resolve Target ID if not already resolved
+    // Resolve Target ID fallback if not already resolved
     if (!examTargetId) {
       const targetSearch = dto.examTargetName || (examTypeUpper === 'FULL_EXAM' ? 'NEET' : examTypeUpper);
       const matched = await this.prisma.examTarget.findFirst({
-        where: { name: { contains: targetSearch === 'JEE_NEET_CET' ? 'NEET' : targetSearch, mode: 'insensitive' } },
+        where: {
+          OR: [
+            { name: { equals: targetSearch === 'JEE_NEET_CET' ? 'NEET' : targetSearch, mode: 'insensitive' } },
+            { name: { contains: targetSearch === 'JEE_NEET_CET' ? 'NEET' : targetSearch, mode: 'insensitive' } },
+          ],
+        },
       });
       if (matched) {
         examTargetId = matched.id;

@@ -62,3 +62,13 @@ export class RetryLanguageDto {
   @IsNotEmpty()
   languageId: string;
 }
+
+export class StartExamTranslationDto {
+  @IsUUID()
+  @IsNotEmpty()
+  examId: string;
+
+  @IsUUID()
+  @IsOptional()
+  examVersionId?: string;
+}

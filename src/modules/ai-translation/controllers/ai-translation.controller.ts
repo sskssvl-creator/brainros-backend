@@ -21,6 +21,7 @@ import { AiTranslationService } from '../services/ai-translation.service';
 import {
   SubmitAiTranslationDto,
   RetryLanguageDto,
+  StartExamTranslationDto,
 } from '../dto/ai-translation.dto';
 
 @Controller('ai-translations')
@@ -62,6 +63,23 @@ export class AiTranslationController {
   ) {
     const userId = user?.userId || user?.id;
     return this.aiTranslationService.submitAndStartTranslation(dto, userId);
+  }
+
+  /**
+   * POST /api/ai-translations/start
+   * Start AI translation for an existing exam and its questions
+   */
+  @Post('start')
+  async startTranslation(
+    @Body() dto: StartExamTranslationDto,
+    @CurrentUser() user: any,
+  ) {
+    const userId = user?.userId || user?.id;
+    return this.aiTranslationService.startQuestionPaperTranslation(
+      dto.examId,
+      dto.examVersionId || '',
+      userId,
+    );
   }
 
   /**

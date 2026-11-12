@@ -7,6 +7,11 @@ import {
   GeminiErrorKind,
 } from './gemini-error-classifier';
 import { AI_TRANSLATION_DEFAULTS } from '../constants/ai-translation.constants';
+import {
+  validateTextScript,
+  sanitizeTextScript,
+  INDIC_SCRIPT_BLOCKS,
+} from '../../../common/utils/unicode-script-validator';
 
 export interface QuestionBatchItem {
   questionNumber: number;
@@ -106,7 +111,7 @@ export class GeminiTranslationService {
   }
 
   /**
-   * Translate a batch of rich questions (with isolated text segments)
+   * Translate a batch of rich questions (with isolated text segments) with strict script validation & auto-correction
    */
   async translateRichBatch(
     questions: RichQuestionBatchItem[],
@@ -131,10 +136,11 @@ export class GeminiTranslationService {
       this.genAI = new GoogleGenerativeAI(apiKey);
     }
 
-    const prompt = this.buildRichPrompt(questions, targetLanguageName, targetLanguageCode);
+    const basePrompt = this.buildRichPrompt(questions, targetLanguageName, targetLanguageCode);
     const candidateModels = this.resolveCandidateModels();
 
     let lastError: Error | null = null;
+    let correctiveFeedback = '';
 
     for (const modelId of candidateModels) {
       const model = this.genAI.getGenerativeModel({
@@ -149,34 +155,57 @@ export class GeminiTranslationService {
         const releaseSlot = await this.rateLimiter.acquireSlot();
 
         try {
-          const result = await model.generateContent(prompt);
+          const currentPrompt = correctiveFeedback
+            ? `${basePrompt}\n\n🚨 URGENT CORRECTION REQUIRED (Previous attempt failed):\n${correctiveFeedback}\nTranslate ALL questions again ensuring 100% pure ${targetLanguageName} script.`
+            : basePrompt;
+
+          const result = await model.generateContent(currentPrompt);
           const responseText = result.response.text();
-          const parsed = this.parseAndValidateRichResponse(responseText, questions);
+          const parsed = this.parseAndValidateRichResponse(
+            responseText,
+            questions,
+            targetLanguageCode,
+            targetLanguageName,
+          );
           return parsed;
         } catch (err: any) {
           lastError = err;
-          const classified = GeminiErrorClassifier.classify(err, {
-            defaultRetryDelayMs: 5000,
-            retryBufferMs: this.retryBufferMs,
-          });
 
-          this.logger.warn(
-            `[${modelId}] Rich Translation attempt ${attempt}/${this.maxRetries} failed for ${targetLanguageName}: [${classified.kind}] ${err.message}`,
-          );
+          if (err.isScriptValidationError) {
+            correctiveFeedback = `SCRIPT CONTAMINATION DETECTED on attempt ${attempt}: ${err.message}. You MUST use ONLY ${targetLanguageName} characters (no other Indic scripts, no Greek, no Thai).`;
+            this.logger.warn(
+              `[${modelId}] Script validation failed for ${targetLanguageName} (attempt ${attempt}/${this.maxRetries}): ${err.message}. Retrying with targeted script enforcement prompt...`,
+            );
+          } else {
+            const classified = GeminiErrorClassifier.classify(err, {
+              defaultRetryDelayMs: 5000,
+              retryBufferMs: this.retryBufferMs,
+            });
 
-          if (
-            classified.kind === GeminiErrorKind.AUTHENTICATION_ERROR ||
-            classified.kind === GeminiErrorKind.INVALID_REQUEST
-          ) {
-            throw new Error(classified.userFacingMessage);
-          }
+            this.logger.warn(
+              `[${modelId}] Rich Translation attempt ${attempt}/${this.maxRetries} failed for ${targetLanguageName}: [${classified.kind}] ${err.message}`,
+            );
 
-          if (classified.kind === GeminiErrorKind.MODEL_UNAVAILABLE) {
-            break;
+            if (
+              classified.kind === GeminiErrorKind.AUTHENTICATION_ERROR ||
+              classified.kind === GeminiErrorKind.INVALID_REQUEST
+            ) {
+              throw new Error(classified.userFacingMessage);
+            }
+
+            if (
+              classified.kind === GeminiErrorKind.MODEL_UNAVAILABLE ||
+              classified.kind === GeminiErrorKind.DAILY_QUOTA_EXHAUSTED
+            ) {
+              this.logger.warn(
+                `[${modelId}] Model unavailable or quota exhausted for ${targetLanguageName}. Switching to next candidate model...`,
+              );
+              break;
+            }
           }
 
           if (attempt < this.maxRetries) {
-            const delay = classified.retryDelayMs || 2000 * Math.pow(2, attempt - 1);
+            const delay = 2000 * Math.pow(2, attempt - 1);
             await new Promise((resolve) => setTimeout(resolve, delay));
           }
         } finally {
@@ -189,7 +218,7 @@ export class GeminiTranslationService {
   }
 
   /**
-   * Translate a batch of plain questions to the target language through the Global Rate Limiter
+   * Translate a batch of plain questions to the target language with strict script validation & auto-correction
    */
   async translateBatch(
     questions: QuestionBatchItem[],
@@ -214,10 +243,11 @@ export class GeminiTranslationService {
       this.genAI = new GoogleGenerativeAI(apiKey);
     }
 
-    const prompt = this.buildPrompt(questions, targetLanguageName, targetLanguageCode);
+    const basePrompt = this.buildPrompt(questions, targetLanguageName, targetLanguageCode);
     const candidateModels = this.resolveCandidateModels();
 
     let lastError: Error | null = null;
+    let correctiveFeedback = '';
 
     for (const modelId of candidateModels) {
       const model = this.genAI.getGenerativeModel({
@@ -232,34 +262,57 @@ export class GeminiTranslationService {
         const releaseSlot = await this.rateLimiter.acquireSlot();
 
         try {
-          const result = await model.generateContent(prompt);
+          const currentPrompt = correctiveFeedback
+            ? `${basePrompt}\n\n🚨 URGENT CORRECTION REQUIRED (Previous attempt failed):\n${correctiveFeedback}\nTranslate ALL questions again ensuring 100% pure ${targetLanguageName} script.`
+            : basePrompt;
+
+          const result = await model.generateContent(currentPrompt);
           const responseText = result.response.text();
-          const parsed = this.parseAndValidateResponse(responseText, questions);
+          const parsed = this.parseAndValidateResponse(
+            responseText,
+            questions,
+            targetLanguageCode,
+            targetLanguageName,
+          );
           return parsed;
         } catch (err: any) {
           lastError = err;
-          const classified = GeminiErrorClassifier.classify(err, {
-            defaultRetryDelayMs: 5000,
-            retryBufferMs: this.retryBufferMs,
-          });
 
-          this.logger.warn(
-            `[${modelId}] Translation attempt ${attempt}/${this.maxRetries} failed for ${targetLanguageName}: [${classified.kind}] ${err.message}`,
-          );
+          if (err.isScriptValidationError) {
+            correctiveFeedback = `SCRIPT CONTAMINATION DETECTED on attempt ${attempt}: ${err.message}. You MUST use ONLY ${targetLanguageName} characters.`;
+            this.logger.warn(
+              `[${modelId}] Script validation failed for ${targetLanguageName} (attempt ${attempt}/${this.maxRetries}): ${err.message}. Retrying with targeted script enforcement prompt...`,
+            );
+          } else {
+            const classified = GeminiErrorClassifier.classify(err, {
+              defaultRetryDelayMs: 5000,
+              retryBufferMs: this.retryBufferMs,
+            });
 
-          if (
-            classified.kind === GeminiErrorKind.AUTHENTICATION_ERROR ||
-            classified.kind === GeminiErrorKind.INVALID_REQUEST
-          ) {
-            throw new Error(classified.userFacingMessage);
-          }
+            this.logger.warn(
+              `[${modelId}] Translation attempt ${attempt}/${this.maxRetries} failed for ${targetLanguageName}: [${classified.kind}] ${err.message}`,
+            );
 
-          if (classified.kind === GeminiErrorKind.MODEL_UNAVAILABLE) {
-            break;
+            if (
+              classified.kind === GeminiErrorKind.AUTHENTICATION_ERROR ||
+              classified.kind === GeminiErrorKind.INVALID_REQUEST
+            ) {
+              throw new Error(classified.userFacingMessage);
+            }
+
+            if (
+              classified.kind === GeminiErrorKind.MODEL_UNAVAILABLE ||
+              classified.kind === GeminiErrorKind.DAILY_QUOTA_EXHAUSTED
+            ) {
+              this.logger.warn(
+                `[${modelId}] Model unavailable or quota exhausted for ${targetLanguageName}. Switching to next candidate model...`,
+              );
+              break;
+            }
           }
 
           if (attempt < this.maxRetries) {
-            const delay = classified.retryDelayMs || 2000 * Math.pow(2, attempt - 1);
+            const delay = 2000 * Math.pow(2, attempt - 1);
             await new Promise((resolve) => setTimeout(resolve, delay));
           }
         } finally {
@@ -274,13 +327,16 @@ export class GeminiTranslationService {
   private resolveCandidateModels(): string[] {
     const list = [this.modelName];
     const FALLBACK_MODELS = [
-      'gemini-1.5-flash',
-      'gemini-1.5-pro',
-      'gemini-2.0-flash',
-      'gemini-2.5-flash',
+      'gemini-3.1-flash-lite',
+      'gemini-flash-lite-latest',
+      'gemini-3.5-flash',
+      'gemini-3.8-flash',
     ];
-    for (const f of FALLBACK_MODELS) {
-      if (!list.includes(f)) list.push(f);
+
+    for (const fb of FALLBACK_MODELS) {
+      if (!list.includes(fb)) {
+        list.push(fb);
+      }
     }
     return list;
   }
@@ -290,22 +346,40 @@ export class GeminiTranslationService {
     targetLanguageName: string,
     targetLanguageCode: string,
   ): string {
-    return `You are a certified professional academic translator specializing in educational and competitive examination question papers.
-Translate the text segments within each question into ${targetLanguageName} (${targetLanguageCode}).
+    const scriptInfo = INDIC_SCRIPT_BLOCKS[targetLanguageCode.toLowerCase()] || {
+      name: targetLanguageName,
+    };
 
-STRICT TRANSLATION RULES:
-1. Translate each segment value into the native script of ${targetLanguageName} (e.g. Gujarati script for Gujarati, Devanagari script for Hindi/Marathi, Tamil script for Tamil, Telugu script for Telugu, Bengali script for Bengali, Malayalam script for Malayalam, Kannada script for Kannada).
-2. DO NOT change, add, or delete segment keys (e.g. seg_0, seg_1). Keep every key EXACTLY as provided.
-3. Preserve mathematical formulas, chemical equations, numerical values, and standard scientific units.
-4. Output strictly a valid JSON array of objects matching the input structure:
+    return `You are a certified professional academic translator specializing in Indian competitive examination question papers (NEET / JEE).
+Translate the text segments within each question into ${targetLanguageName} (${targetLanguageCode}).
+REQUIRED SCRIPT: ${scriptInfo.name} script.
+
+CRITICAL TRANSLATION & SCRIPT PURITY RULES:
+1. STRICT SCRIPT ISOLATION (ZERO TOLERANCE FOR CROSS-SCRIPT CONTAMINATION):
+   - Every single word must be written 100% in the native ${scriptInfo.name} script of ${targetLanguageName}.
+   - NEVER use characters or words from OTHER Indian scripts:
+     * NEVER use Gujarati script for Bengali, Tamil, Telugu, Hindi, Kannada, or Malayalam.
+     * NEVER mix Tamil characters or suffixes (e.g. -ன், -ம், ாங்கம்) into Telugu, Malayalam, or Kannada.
+     * NEVER mix Bengali characters into Telugu, Kannada, or Gujarati.
+     * NEVER mix Devanagari characters into Gujarati, Telugu, Tamil, Kannada, or Malayalam.
+     * NEVER output Greek characters (e.g. απότομη) or Thai tone marks.
+   - Standard Latin letters and ASCII digits/symbols are permitted ONLY for standard scientific notations, chemical formulas, and SI units (e.g. CO2, ATP, DNA, kg, m/s², pH, °C, 400 K, sin, cos).
+2. COMPLETE TRANSLATION OF ALL OPTIONS:
+   - Translate ALL 4 multiple-choice options (A, B, C, D).
+   - Do NOT leave chemical names or choices in English (e.g. translate "Ethane, Ethene, Ethyne, Benzene" into ${targetLanguageName}).
+3. NO QUESTION PREFIXES OR LABELS:
+   - Do NOT prepend "Q121:", "Question 121:", "પ્રશ્ન ૧૨૧:", "প্রশ্ন ১২১:", "ప్రశ్న", "ಪ್ರಶ್ನೆ" or any number label inside the segment values. The question number is managed externally.
+4. DO NOT change, add, or delete segment keys (e.g. seg_0, seg_1). Keep every key EXACTLY as provided.
+5. Preserve mathematical formulas, chemical equations, numerical values, and standard scientific units.
+6. Output strictly a valid JSON array of objects matching the input structure:
 [
   {
     "questionNumber": number,
-    "questionSegments": { "seg_0": "translated text in ${targetLanguageName}", ... },
-    "optionASegments": { "seg_1": "translated text in ${targetLanguageName}", ... },
-    "optionBSegments": { "seg_2": "translated text in ${targetLanguageName}", ... },
-    "optionCSegments": { "seg_3": "translated text in ${targetLanguageName}", ... },
-    "optionDSegments": { "seg_4": "translated text in ${targetLanguageName}", ... },
+    "questionSegments": { "seg_0": "translated text strictly in ${targetLanguageName}", ... },
+    "optionASegments": { "seg_1": "translated text strictly in ${targetLanguageName}", ... },
+    "optionBSegments": { "seg_2": "translated text strictly in ${targetLanguageName}", ... },
+    "optionCSegments": { "seg_3": "translated text strictly in ${targetLanguageName}", ... },
+    "optionDSegments": { "seg_4": "translated text strictly in ${targetLanguageName}", ... },
     "assertionSegments": { ... },
     "reasonSegments": { ... },
     "passageSegments": { ... }
@@ -322,15 +396,29 @@ ${JSON.stringify(questions, null, 2)}
     targetLanguageName: string,
     targetLanguageCode: string,
   ): string {
-    return `You are a certified professional academic translator specializing in educational and competitive examination question papers.
-Translate the following exam questions and their multiple choice options from English into ${targetLanguageName} (${targetLanguageCode}).
+    const scriptInfo = INDIC_SCRIPT_BLOCKS[targetLanguageCode.toLowerCase()] || {
+      name: targetLanguageName,
+    };
 
-STRICT TRANSLATION RULES:
-1. Translate the 'question', 'optionA', 'optionB', 'optionC', and 'optionD' text accurately into ${targetLanguageName}.
-2. ALL output text for 'question', 'optionA', 'optionB', 'optionC', and 'optionD' MUST be written in the native script/alphabet of ${targetLanguageName} (e.g. Gujarati script for Gujarati, Devanagari script for Hindi/Marathi, Tamil script for Tamil, Telugu script for Telugu, Bengali script for Bengali, Malayalam script for Malayalam, Kannada script for Kannada).
-3. Do NOT leave sentences, placeholder words, or text in English/Latin characters when translating into a regional language. Even if the input contains test data, dummy words, or placeholder text, translate and render them completely into ${targetLanguageName}'s native script.
+    return `You are a certified professional academic translator specializing in Indian competitive examination question papers (NEET / JEE).
+Translate the following exam questions and their multiple choice options from English into ${targetLanguageName} (${targetLanguageCode}).
+REQUIRED SCRIPT: ${scriptInfo.name} script.
+
+CRITICAL TRANSLATION & SCRIPT PURITY RULES:
+1. STRICT SCRIPT ISOLATION:
+   - Translate 'question', 'optionA', 'optionB', 'optionC', and 'optionD' accurately and strictly in the native script of ${targetLanguageName} (${scriptInfo.name}).
+   - NEVER use characters or words from OTHER Indian scripts:
+     * NEVER use Gujarati script for Bengali, Tamil, Telugu, Hindi, Kannada, or Malayalam.
+     * NEVER mix Tamil characters or suffixes into Telugu, Malayalam, or Kannada.
+     * NEVER mix Bengali characters into Telugu, Kannada, or Gujarati.
+     * NEVER mix Devanagari characters into Gujarati, Telugu, Tamil, Kannada, or Malayalam.
+     * NEVER output Greek characters or Thai tone marks.
+2. COMPLETE TRANSLATION:
+   - Do NOT leave options in English characters. Translate all options into ${targetLanguageName}.
+3. NO QUESTION PREFIXES:
+   - Do NOT prepend "Q1:", "Question 1:", or any numbering inside the translated text.
 4. DO NOT change or reorder 'questionNumber'.
-5. Preserve mathematical formulas, chemical equations, numerical values, and standard scientific units (e.g. m/s², kg, °C).
+5. Preserve mathematical formulas, chemical equations, numerical values, and standard scientific units (e.g. m/s², kg, °C, 400 K).
 6. If the translated text contains double quotes ("), properly escape them as \\" inside JSON strings.
 7. Output strictly a valid JSON array of objects without markdown fences, comments, or trailing commas:
 [
@@ -371,36 +459,14 @@ ${JSON.stringify(questions, null, 2)}
       cleanText = cleanText.substring(firstBracket, lastBracket + 1);
     }
 
-    // 3. Try standard JSON.parse first
-    try {
-      return JSON.parse(cleanText);
-    } catch (firstErr: any) {
-      // 4. Sanitize trailing commas before } or ]
-      let repaired = cleanText.replace(/,\s*([}\]])/g, '$1');
-
-      try {
-        return JSON.parse(repaired);
-      } catch (secondErr: any) {
-        // 5. Try fixing unescaped newlines/tabs inside JSON string literals
-        repaired = repaired.replace(/[\u0000-\u001F\u007F-\u009F]/g, (c) => {
-          if (c === '\n') return '\\n';
-          if (c === '\r') return '\\r';
-          if (c === '\t') return '\\t';
-          return '';
-        });
-
-        try {
-          return JSON.parse(repaired);
-        } catch (_) {
-          throw new Error(`Invalid JSON returned from AI model: ${firstErr.message}`);
-        }
-      }
-    }
+    return JSON.parse(cleanText);
   }
 
   private parseAndValidateRichResponse(
     responseText: string,
     originalQuestions: RichQuestionBatchItem[],
+    targetLanguageCode: string,
+    targetLanguageName: string,
   ): TranslatedRichQuestionBatchItem[] {
     const rawJson = this.extractAndCleanJson(responseText);
 
@@ -433,15 +499,73 @@ ${JSON.stringify(questions, null, 2)}
           `Missing translated item for rich question #${orig.questionNumber} from AI model.`,
         );
       }
+
+      // Script integrity verification on all segments of this question
+      this.validateAndCleanRichSegments(trans, targetLanguageCode, targetLanguageName);
+
       translatedList.push(trans);
     }
 
     return translatedList;
   }
 
+  private validateAndCleanRichSegments(
+    item: TranslatedRichQuestionBatchItem,
+    targetLanguageCode: string,
+    targetLanguageName: string,
+  ): void {
+    const segmentContainers = [
+      item.questionSegments,
+      item.optionASegments,
+      item.optionBSegments,
+      item.optionCSegments,
+      item.optionDSegments,
+      item.assertionSegments,
+      item.reasonSegments,
+      item.passageSegments,
+    ];
+
+    for (const container of segmentContainers) {
+      if (!container) continue;
+      for (const [key, text] of Object.entries(container)) {
+        if (!text || typeof text !== 'string') continue;
+
+        // 1. Strip accidental LLM prefix labels like "Q121:", "Question 121:", "પ્રશ્ન ૧૨૧:", "প্রশ্ন ১২১:"
+        let cleaned = text.replace(
+          /^(?:Q\d+[:.]?|Question\s*\d+[:.]?|પ્રશ્ન\s*[\d૧૨૩૪૫૬૭૮૯૦]+[:.]?|প্রশ্ন\s*[\d১২৩৪৫৬৭৮৯০]+[:.]?|ప్రశ్న\s*[\d౧౨౩౪౫౬౭౮౯౦]+[:.]?|ಪ್ರಶ್ನೆ\s*[\d೧೨೩೪೫೬೭೮೯೦]+[:.]?|प्रश्न\s*[\d१२३४५६७८९०]+[:.]?|கேள்வி\s*[\d௧௨௩௪௫௬௭௮௯௦]+[:.]?)\s*/i,
+          '',
+        );
+
+        // 2. Validate script integrity
+        const res = validateTextScript(cleaned, targetLanguageCode);
+        if (!res.isValid) {
+          const isSevere =
+            res.violations.length > 2 ||
+            res.violations.some((v) => v.detectedScript?.includes('Cross-Script Contamination'));
+
+          if (isSevere) {
+            const err = new Error(
+              `Question #${item.questionNumber} segment "${key}" has cross-script contamination: ${res.summary}`,
+            );
+            (err as any).isScriptValidationError = true;
+            throw err;
+          }
+
+          // Minor isolated stray glyph: sanitize
+          const sanitized = sanitizeTextScript(cleaned, targetLanguageCode);
+          cleaned = sanitized.cleaned;
+        }
+
+        container[key] = cleaned;
+      }
+    }
+  }
+
   private parseAndValidateResponse(
     responseText: string,
     originalQuestions: QuestionBatchItem[],
+    targetLanguageCode: string,
+    targetLanguageName: string,
   ): TranslatedQuestionBatchItem[] {
     const rawJson = this.extractAndCleanJson(responseText);
 
@@ -479,9 +603,57 @@ ${JSON.stringify(questions, null, 2)}
           `Missing translated item for question #${orig.questionNumber} from AI model.`,
         );
       }
+
+      // Validate & clean plain question items
+      this.validateAndCleanPlainItem(trans, targetLanguageCode, targetLanguageName);
+
       translatedList.push(trans);
     }
 
     return translatedList;
+  }
+
+  private validateAndCleanPlainItem(
+    item: TranslatedQuestionBatchItem,
+    targetLanguageCode: string,
+    targetLanguageName: string,
+  ): void {
+    const fields: (keyof TranslatedQuestionBatchItem)[] = [
+      'question',
+      'optionA',
+      'optionB',
+      'optionC',
+      'optionD',
+    ];
+
+    for (const field of fields) {
+      const val = item[field];
+      if (typeof val !== 'string' || !val) continue;
+
+      let cleaned = val.replace(
+        /^(?:Q\d+[:.]?|Question\s*\d+[:.]?|પ્રશ્ન\s*[\d૧૨૩૪૫૬૭૮૯૦]+[:.]?|প্রশ্ন\s*[\d১২৩৪৫৬৭৮৯০]+[:.]?|ప్రశ్న\s*[\d౧౨౩౪౫౬౭౮౯౦]+[:.]?|ಪ್ರಶ್ನೆ\s*[\d೧೨೩೪೫೬೭೮೯೦]+[:.]?|प्रश्न\s*[\d१२३४५६७८९०]+[:.]?)\s*/i,
+        '',
+      );
+
+      const res = validateTextScript(cleaned, targetLanguageCode);
+      if (!res.isValid) {
+        const isSevere =
+          res.violations.length > 2 ||
+          res.violations.some((v) => v.detectedScript?.includes('Cross-Script Contamination'));
+
+        if (isSevere) {
+          const err = new Error(
+            `Question #${item.questionNumber} field "${field}" has cross-script contamination: ${res.summary}`,
+          );
+          (err as any).isScriptValidationError = true;
+          throw err;
+        }
+
+        const sanitized = sanitizeTextScript(cleaned, targetLanguageCode);
+        cleaned = sanitized.cleaned;
+      }
+
+      (item as any)[field] = cleaned;
+    }
   }
 }

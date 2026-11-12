@@ -18,6 +18,7 @@ import {
   reconstructTranslatedDocument,
 } from '../../../common/utils/rich-content-translation';
 import { extractPlainText } from '../../../common/utils/rich-content-text-extractor';
+import { validateTextScript } from '../../../common/utils/unicode-script-validator';
 
 export interface ManualQuestionItem {
   questionText: string;
@@ -419,8 +420,21 @@ export class AiTranslationParentProcessor extends WorkerHost {
         },
       });
 
-      const existingQIdSet = new Set(existingTranslations.map((t) => t.examVersionQuestionId));
-      const untranslatedSlice = batchSlice.filter((evq) => !existingQIdSet.has(evq.id));
+      // ── SCRIPT-AWARE IDEMPOTENCY CHECK ──
+      // An existing translation is only accepted if it passes 100% script validation
+      const validExistingIds = new Set<string>();
+      for (const t of existingTranslations) {
+        const check = validateTextScript(t.questionText, languageCode);
+        if (check.isValid) {
+          validExistingIds.add(t.examVersionQuestionId);
+        } else {
+          this.logger.warn(
+            `[Script Validator] Existing translation for question ${t.examVersionQuestionId} (${languageName}) failed script validation: ${check.summary}. Invalidating cached translation for re-translation.`,
+          );
+        }
+      }
+
+      const untranslatedSlice = batchSlice.filter((evq) => !validExistingIds.has(evq.id));
 
       if (untranslatedSlice.length === 0) {
         this.logger.log(
@@ -435,7 +449,7 @@ export class AiTranslationParentProcessor extends WorkerHost {
       }
 
       // Prepare rich segments and templates for each question in slice
-      const richItems = untranslatedSlice.map((evq) => {
+      const richItems = untranslatedSlice.map((evq, idx) => {
         const qExtracted = extractTranslatableSegments(evq.questionContent || evq.questionText);
         const assertionExtracted =
           evq.assertionContent || evq.assertion
@@ -450,10 +464,22 @@ export class AiTranslationParentProcessor extends WorkerHost {
             ? extractTranslatableSegments((evq as any).passageContent || (evq as any).passage)
             : null;
 
-        const optA = evq.options.find((o) => o.optionKey === 'A');
-        const optB = evq.options.find((o) => o.optionKey === 'B');
-        const optC = evq.options.find((o) => o.optionKey === 'C');
-        const optD = evq.options.find((o) => o.optionKey === 'D');
+        const sortedOpts = [...evq.options].sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0));
+        const findOption = (key: string, optIndex: number) => {
+          const direct = evq.options.find(
+            (o) =>
+              o.optionKey?.trim().toUpperCase() === key ||
+              o.optionKey?.trim().toLowerCase() === key.toLowerCase() ||
+              o.optionKey?.trim() === String(optIndex + 1),
+          );
+          if (direct) return direct;
+          return sortedOpts[optIndex] || null;
+        };
+
+        const optA = findOption('A', 0);
+        const optB = findOption('B', 1);
+        const optC = findOption('C', 2);
+        const optD = findOption('D', 3);
 
         const optAExtracted = extractTranslatableSegments(optA?.optionContent || optA?.optionText || '');
         const optBExtracted = extractTranslatableSegments(optB?.optionContent || optB?.optionText || '');
@@ -461,6 +487,7 @@ export class AiTranslationParentProcessor extends WorkerHost {
         const optDExtracted = extractTranslatableSegments(optD?.optionContent || optD?.optionText || '');
 
         return {
+          batchIndex: idx + 1,
           questionNumber: evq.sequenceNumber,
           evq,
           templates: {
@@ -474,7 +501,7 @@ export class AiTranslationParentProcessor extends WorkerHost {
             optD: optDExtracted.template,
           },
           batchItem: {
-            questionNumber: evq.sequenceNumber,
+            questionNumber: idx + 1,
             questionSegments: qExtracted.segments,
             optionASegments: optAExtracted.segments,
             optionBSegments: optBExtracted.segments,
@@ -502,9 +529,13 @@ export class AiTranslationParentProcessor extends WorkerHost {
         // Upsert translations into DB atomically
         await this.prisma.$transaction(
           async (tx) => {
-            for (const item of richItems) {
+            for (let rIdx = 0; rIdx < richItems.length; rIdx++) {
+              const item = richItems[rIdx];
               const { evq, templates } = item;
-              const tr = transMap.get(evq.sequenceNumber);
+              const tr =
+                transMap.get(item.batchIndex) ||
+                transMap.get(evq.sequenceNumber) ||
+                translatedBatch[rIdx];
               if (!tr) continue;
 
               const translatedQuestionContent = reconstructTranslatedDocument(
@@ -616,8 +647,15 @@ export class AiTranslationParentProcessor extends WorkerHost {
                 D: { segments: tr.optionDSegments, template: templates.optD },
               };
 
-              for (const evOpt of evq.options) {
-                const optData = optSegmentMap[evOpt.optionKey];
+              for (let optIdx = 0; optIdx < evq.options.length; optIdx++) {
+                const evOpt = evq.options[optIdx];
+                const normalizedKey = (evOpt.optionKey || '').trim().toUpperCase();
+                const positionalKey = ['A', 'B', 'C', 'D'][optIdx];
+                const optData =
+                  optSegmentMap[normalizedKey] ||
+                  (normalizedKey === '1' ? optSegmentMap.A : normalizedKey === '2' ? optSegmentMap.B : normalizedKey === '3' ? optSegmentMap.C : normalizedKey === '4' ? optSegmentMap.D : null) ||
+                  (positionalKey ? optSegmentMap[positionalKey] : null);
+
                 const optContent = optData
                   ? reconstructTranslatedDocument(optData.template, optData.segments, evOpt.optionText)
                   : evOpt.optionContent || null;

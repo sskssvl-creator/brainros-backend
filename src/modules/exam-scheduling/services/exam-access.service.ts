@@ -95,7 +95,7 @@ export class ExamAccessService {
       });
     }
 
-    if (currentStatus !== 'ACTIVE' && currentStatus !== 'COMPLETED') {
+    if (currentStatus !== 'ACTIVE' && currentStatus !== 'COMPLETED' && currentStatus !== 'PUBLISHED') {
       throw new ForbiddenException({
         code: 'EXAM_ACCESS_DENIED',
         message: `Exam status is '${currentStatus}'. Student access is denied.`,

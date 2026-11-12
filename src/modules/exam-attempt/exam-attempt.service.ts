@@ -809,6 +809,24 @@ export class ExamAttemptService {
       );
     }
 
+    // 1b. Strict Lock: Once examination starts, student cannot change language away from their initial selection
+    const currentLangId = attempt.displayLanguageId || attempt.languageId;
+    if (attempt.startedAt || (attempt as any).status?.name === 'IN_PROGRESS') {
+      const isSameLanguage =
+        language.id === currentLangId ||
+        language.id === attempt.languageId ||
+        language.id === attempt.displayLanguageId ||
+        Boolean(language.code && (attempt as any).language?.code && language.code.toLowerCase() === (attempt as any).language?.code?.toLowerCase());
+
+      if (!isSameLanguage) {
+        throw new ForbiddenException({
+          code: 'LANGUAGE_LOCKED',
+          message:
+            'Exam language is locked to your pre-exam selection and cannot be changed once the examination has started.',
+        });
+      }
+    }
+
     // 2. Verify language is allowed for this exam (if ExamLanguage configured)
     const examLanguageCount = await this.prisma.examLanguage.count({
       where: { examId: attempt.examId },
@@ -1062,12 +1080,18 @@ export class ExamAttemptService {
               if (!qItem) return null;
 
               const currentLanguageCode = (attempt as any).language?.code?.toLowerCase() || 'en';
-              // Translation resolution with strict fallback
-              const matchedTranslation =
+              // Check if primary target language translation exists for question stem
+              const targetQTrans =
                 qItem.translations[currentLanguageId] ||
                 qItem.translations[currentLanguageId.toLowerCase()] ||
                 qItem.translations[currentLanguageId.toUpperCase()] ||
-                (currentLanguageCode ? qItem.translations[currentLanguageCode] : null) ||
+                (currentLanguageCode ? qItem.translations[currentLanguageCode] : null);
+
+              const hasTargetQTrans = Boolean(targetQTrans?.questionText || targetQTrans?.questionContent);
+
+              // Translation resolution with strict fallback
+              const matchedTranslation =
+                targetQTrans ||
                 (defaultLangId ? qItem.translations[defaultLangId] : null) ||
                 qItem.translations['en'] ||
                 null;
@@ -1077,11 +1101,17 @@ export class ExamAttemptService {
                   const optItem = qItem.optionsById[aqo.examQuestionOptionId];
                   if (!optItem) return null;
 
+                  // Only render target language for options if question stem itself is available in target language,
+                  // preventing split-language display (e.g. English stem with Tamil options)
+                  const targetOptTrans = hasTargetQTrans
+                    ? optItem.translations?.[currentLanguageId] ||
+                      optItem.translations?.[currentLanguageId.toLowerCase()] ||
+                      optItem.translations?.[currentLanguageId.toUpperCase()] ||
+                      (currentLanguageCode ? optItem.translations?.[currentLanguageCode] : null)
+                    : null;
+
                   const optTrans =
-                    optItem.translations?.[currentLanguageId] ||
-                    optItem.translations?.[currentLanguageId.toLowerCase()] ||
-                    optItem.translations?.[currentLanguageId.toUpperCase()] ||
-                    (currentLanguageCode ? optItem.translations?.[currentLanguageCode] : null) ||
+                    targetOptTrans ||
                     (defaultLangId ? optItem.translations?.[defaultLangId] : null) ||
                     optItem.translations?.['en'] ||
                     null;
@@ -1225,18 +1255,16 @@ export class ExamAttemptService {
 
         // 4-Tier Translation Fallback:
         const currentLanguageCode = (attempt as any).language?.code?.toLowerCase() || 'en';
-        // 4-Tier Fallback:
-        // 1. Attempt Language (ID or Code)
-        // 2. Exam Default Language
-        // 3. Question Default Language
-        // 4. English Master Translation
+        const targetQTrans = q.translations.find(
+          (t) =>
+            t.languageId === currentLanguageId ||
+            t.language?.code?.toLowerCase() === currentLanguageCode ||
+            (t as any).languageCode?.toLowerCase() === currentLanguageCode,
+        );
+        const hasTargetQTrans = Boolean(targetQTrans?.questionText || (targetQTrans as any)?.questionContent);
+
         const matchedTranslation =
-          q.translations.find(
-            (t) =>
-              t.languageId === currentLanguageId ||
-              t.language?.code?.toLowerCase() === currentLanguageCode ||
-              (t as any).languageCode?.toLowerCase() === currentLanguageCode,
-          ) ||
+          targetQTrans ||
           (examDefaultLanguageId
             ? q.translations.find((t) => t.languageId === examDefaultLanguageId)
             : null) ||
@@ -1302,13 +1330,19 @@ export class ExamAttemptService {
             const rawOpt = rawOptionsMap.get(aqo.examQuestionOptionId);
             if (!rawOpt) return null;
 
+            // Only render target language for options if question stem itself is available in target language,
+            // preventing split-language display (e.g. English stem with Tamil options)
+            const targetOptTrans = hasTargetQTrans
+              ? rawOpt.translations?.find(
+                  (ot: any) =>
+                    ot.languageId === currentLanguageId ||
+                    ot.language?.code?.toLowerCase() === currentLanguageCode ||
+                    ot.languageCode?.toLowerCase() === currentLanguageCode,
+                )
+              : null;
+
             const matchedOptTranslation =
-              rawOpt.translations?.find(
-                (ot: any) =>
-                  ot.languageId === currentLanguageId ||
-                  ot.language?.code?.toLowerCase() === currentLanguageCode ||
-                  ot.languageCode?.toLowerCase() === currentLanguageCode,
-              ) ||
+              targetOptTrans ||
               (examDefaultLanguageId
                 ? rawOpt.translations?.find(
                     (ot: any) => ot.languageId === examDefaultLanguageId,
@@ -1368,13 +1402,19 @@ export class ExamAttemptService {
         // Strict Question-Option linking fallback: if personalized mapping is empty but question has options, map question's own options
         if (orderedOptions.length === 0 && q.options && q.options.length > 0) {
           orderedOptions = q.options.map((rawOpt: any, optIdx: number) => {
+            // Only render target language for options if question stem itself is available in target language,
+            // preventing split-language display (e.g. English stem with Tamil options)
+            const targetOptTrans = hasTargetQTrans
+              ? rawOpt.translations?.find(
+                  (ot: any) =>
+                    ot.languageId === currentLanguageId ||
+                    ot.language?.code?.toLowerCase() === currentLanguageCode ||
+                    ot.languageCode?.toLowerCase() === currentLanguageCode,
+                )
+              : null;
+
             const matchedOptTranslation =
-              rawOpt.translations?.find(
-                (ot: any) =>
-                  ot.languageId === currentLanguageId ||
-                  ot.language?.code?.toLowerCase() === currentLanguageCode ||
-                  ot.languageCode?.toLowerCase() === currentLanguageCode,
-              ) ||
+              targetOptTrans ||
               (examDefaultLanguageId
                 ? rawOpt.translations?.find(
                     (ot: any) => ot.languageId === examDefaultLanguageId,

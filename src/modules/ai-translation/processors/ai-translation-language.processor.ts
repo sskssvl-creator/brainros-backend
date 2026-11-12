@@ -127,14 +127,26 @@ export class AiTranslationLanguageProcessor extends WorkerHost {
         continue;
       }
 
-      const batchItems: QuestionBatchItem[] = untranslatedSlice.map((evq) => {
-        const optA = evq.options.find((o) => o.optionKey === 'A')?.optionText || '';
-        const optB = evq.options.find((o) => o.optionKey === 'B')?.optionText || '';
-        const optC = evq.options.find((o) => o.optionKey === 'C')?.optionText || '';
-        const optD = evq.options.find((o) => o.optionKey === 'D')?.optionText || '';
+      const batchItems: QuestionBatchItem[] = untranslatedSlice.map((evq, idx) => {
+        const sortedOpts = [...evq.options].sort((a, b) => (a.displayOrder ?? 0) - (b.displayOrder ?? 0));
+        const findOptionText = (key: string, optIndex: number) => {
+          const direct = evq.options.find(
+            (o) =>
+              o.optionKey?.trim().toUpperCase() === key ||
+              o.optionKey?.trim().toLowerCase() === key.toLowerCase() ||
+              o.optionKey?.trim() === String(optIndex + 1),
+          );
+          if (direct?.optionText) return direct.optionText;
+          return sortedOpts[optIndex]?.optionText || '';
+        };
+
+        const optA = findOptionText('A', 0);
+        const optB = findOptionText('B', 1);
+        const optC = findOptionText('C', 2);
+        const optD = findOptionText('D', 3);
 
         return {
-          questionNumber: evq.sequenceNumber,
+          questionNumber: idx + 1,
           question: evq.questionText,
           optionA: optA,
           optionB: optB,
@@ -159,8 +171,12 @@ export class AiTranslationLanguageProcessor extends WorkerHost {
         // Upsert translations into DB transaction
         await this.prisma.$transaction(
           async (tx) => {
-            for (const evq of untranslatedSlice) {
-              const tr = transMap.get(evq.sequenceNumber);
+            for (let bIdx = 0; bIdx < untranslatedSlice.length; bIdx++) {
+              const evq = untranslatedSlice[bIdx];
+              const tr =
+                transMap.get(bIdx + 1) ||
+                transMap.get(evq.sequenceNumber) ||
+                translatedBatch[bIdx];
               if (!tr) continue;
 
               const translatedQContent = (evq as any).questionContent
@@ -221,8 +237,16 @@ export class AiTranslationLanguageProcessor extends WorkerHost {
                 D: tr.optionD,
               };
 
-              for (const evOpt of evq.options) {
-                const optText = optMap[evOpt.optionKey] || evOpt.optionText;
+              for (let optIdx = 0; optIdx < evq.options.length; optIdx++) {
+                const evOpt = evq.options[optIdx];
+                const normalizedKey = (evOpt.optionKey || '').trim().toUpperCase();
+                const positionalKey = ['A', 'B', 'C', 'D'][optIdx];
+                const matchedTransText =
+                  optMap[normalizedKey] ||
+                  (normalizedKey === '1' ? optMap.A : normalizedKey === '2' ? optMap.B : normalizedKey === '3' ? optMap.C : normalizedKey === '4' ? optMap.D : null) ||
+                  (positionalKey ? optMap[positionalKey] : null);
+
+                const optText = (matchedTransText && matchedTransText.trim()) ? matchedTransText.trim() : evOpt.optionText;
                 const translatedOptContent = (evOpt as any).optionContent
                   ? buildTranslatedRichDoc((evOpt as any).optionContent, optText)
                   : null;

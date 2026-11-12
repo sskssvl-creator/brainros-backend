@@ -1455,6 +1455,17 @@ export class AdminStudentsService {
     // 10. Exam Target and flags
     if (dto.examTargetId) {
       studentData.examTarget = { connect: { id: dto.examTargetId } };
+      if (dto.jee === undefined && dto.cet === undefined && dto.neet === undefined) {
+        const targetRec = await this.prisma.examTarget.findUnique({
+          where: { id: dto.examTargetId },
+        });
+        if (targetRec) {
+          const autoFlags = mapCanonicalToExamBooleans(targetRec.name);
+          dto.jee = autoFlags.jee;
+          dto.cet = autoFlags.cet;
+          dto.neet = autoFlags.neet;
+        }
+      }
     }
 
     // Handle separate JEE, CET, NEET boolean flags

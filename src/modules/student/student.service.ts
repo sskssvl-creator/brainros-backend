@@ -628,10 +628,26 @@ export class StudentService {
       ],
     };
 
-    // Filter by Exam Target: enforce backend student target eligibility
+    // Filter by Exam Target: enforce backend student target eligibility with combo resolution
     if (query.examTargetId) {
-      if (eligibleTargetIds.includes(query.examTargetId)) {
-        where.AND.push({ examTargetId: query.examTargetId });
+      const selectedTargetRecord = await this.prisma.examTarget.findUnique({
+        where: { id: query.examTargetId },
+      });
+      const resolvedNames = resolveEligibleExamTypes(selectedTargetRecord?.name || '');
+      const expandedTargets = await this.prisma.examTarget.findMany({
+        where: {
+          OR: [
+            { id: query.examTargetId },
+            { name: { in: resolvedNames } },
+          ],
+        },
+        select: { id: true },
+      });
+      const expandedIds = Array.from(new Set([...expandedTargets.map((t) => t.id), query.examTargetId]));
+      const allowedFilteredIds = expandedIds.filter((id) => eligibleTargetIds.includes(id));
+
+      if (allowedFilteredIds.length > 0) {
+        where.AND.push({ examTargetId: { in: allowedFilteredIds } });
       } else {
         // Querying an exam target the student is not eligible for -> return no exams
         where.AND.push({ examTargetId: '00000000-0000-0000-0000-000000000000' });
@@ -898,10 +914,26 @@ export class StudentService {
       },
     };
 
-    // Filter by Exam Target: enforce backend student target eligibility
+    // Filter by Exam Target: enforce backend student target eligibility with combo resolution
     if (query.examTargetId) {
-      if (eligibleTargetIds.includes(query.examTargetId)) {
-        where.examTargetId = query.examTargetId;
+      const selectedTargetRecord = await this.prisma.examTarget.findUnique({
+        where: { id: query.examTargetId },
+      });
+      const resolvedNames = resolveEligibleExamTypes(selectedTargetRecord?.name || '');
+      const expandedTargets = await this.prisma.examTarget.findMany({
+        where: {
+          OR: [
+            { id: query.examTargetId },
+            { name: { in: resolvedNames } },
+          ],
+        },
+        select: { id: true },
+      });
+      const expandedIds = Array.from(new Set([...expandedTargets.map((t) => t.id), query.examTargetId]));
+      const allowedFilteredIds = expandedIds.filter((id) => eligibleTargetIds.includes(id));
+
+      if (allowedFilteredIds.length > 0) {
+        where.examTargetId = { in: allowedFilteredIds };
       } else {
         where.examTargetId = '00000000-0000-0000-0000-000000000000';
       }

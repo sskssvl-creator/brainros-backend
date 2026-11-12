@@ -851,7 +851,9 @@ export class AiTranslationService {
           include: { language: true },
         },
         versions: {
-          where: { id: examVersionId },
+          where: examVersionId ? { id: examVersionId } : undefined,
+          orderBy: { versionNumber: 'desc' },
+          take: 1,
         },
       },
     });
@@ -862,18 +864,23 @@ export class AiTranslationService {
 
     const examVersion =
       exam.versions[0] ||
-      (await this.prisma.examVersion.findUnique({ where: { id: examVersionId } }));
+      (examVersionId
+        ? await this.prisma.examVersion.findUnique({ where: { id: examVersionId } })
+        : await this.prisma.examVersion.findFirst({
+            where: { examId },
+            orderBy: { versionNumber: 'desc' },
+          }));
     if (!examVersion) {
-      throw new NotFoundException(`ExamVersion with ID '${examVersionId}' not found.`);
+      throw new NotFoundException(`No active ExamVersion found for exam '${examId}'.`);
     }
 
     // Count questions in this version
     const totalQuestions = await this.prisma.examVersionQuestion.count({
-      where: { examVersionId },
+      where: { examVersionId: examVersion.id },
     });
 
     if (totalQuestions === 0) {
-      this.logger.warn(`Cannot start AI Translation for examVersionId ${examVersionId}: 0 questions found.`);
+      this.logger.warn(`Cannot start AI Translation for examVersionId ${examVersion.id}: 0 questions found.`);
       return { jobId: '', totalQuestions: 0, totalLanguages: 0, targetLanguages: [] };
     }
 
@@ -934,7 +941,17 @@ export class AiTranslationService {
     });
 
     if (existingJob && (existingJob.status === 'QUEUED' || existingJob.status === 'PROCESSING')) {
-      this.logger.log(`Active AI Translation job ${existingJob.id} already exists for version ${examVersion.id}. Returning existing job.`);
+      this.logger.log(`AI Translation job ${existingJob.id} exists for version ${examVersion.id}. Dispatching to queue...`);
+      await this.parentQueue.add(
+        `ai-translation-${existingJob.id}`,
+        {
+          jobId: existingJob.id,
+          examId: exam.id,
+          examVersionId: examVersion.id,
+          userId,
+        },
+        { attempts: 3 },
+      );
       return {
         jobId: existingJob.id,
         totalQuestions,

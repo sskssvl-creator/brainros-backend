@@ -29,7 +29,11 @@ import { RegisterSendOtpDto, RegisterVerifyOtpDto } from './dto/register-otp.dto
 import { LoginSendOtpDto, LoginVerifyOtpDto } from './dto/login-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
 import { RedisService } from '../redis/redis.service';
-import { CANONICAL_TARGET_EXAMS } from '../../common/constants/target-exam.constant';
+import {
+  CANONICAL_TARGET_EXAMS,
+  mapCanonicalToExamBooleans,
+  resolveEligibleExamTypes,
+} from '../../common/constants/target-exam.constant';
 import * as crypto from 'crypto';
 import axios from 'axios';
 
@@ -169,6 +173,7 @@ export class AuthService {
             studentClass: true,
             preferredLanguage: true,
             examTarget: true,
+            studentExamTargets: { include: { examTarget: true } },
             stateRef: true,
             districtRef: true,
           },
@@ -1479,6 +1484,11 @@ export class AuthService {
           data: { userId: newUser.id, roleId: studentRole.id },
         });
 
+        const targetRecord = resolvedExamTargetId
+          ? await tx.examTarget.findUnique({ where: { id: resolvedExamTargetId } })
+          : null;
+        const flags = mapCanonicalToExamBooleans(targetRecord?.name);
+
         const student = await tx.student.create({
           data: {
             userId: newUser.id,
@@ -1494,10 +1504,28 @@ export class AuthService {
             classId: resolvedClassId,
             preferredLanguageId: resolvedLanguageId,
             examTargetId: resolvedExamTargetId,
+            jee: flags.jee,
+            cet: flags.cet,
+            neet: flags.neet,
             status: 'ACTIVE',
             registrationSource: 'PUBLIC',
           },
         });
+
+        // Sync studentExamTargets junction rows
+        if (targetRecord) {
+          const eligibleNames = resolveEligibleExamTypes(targetRecord.name);
+          const baseTargets = await tx.examTarget.findMany({
+            where: { name: { in: eligibleNames } },
+          });
+          for (const bt of baseTargets) {
+            await tx.studentExamTarget.upsert({
+              where: { studentId_examTargetId: { studentId: student.id, examTargetId: bt.id } },
+              update: {},
+              create: { studentId: student.id, examTargetId: bt.id, isPrimary: true },
+            });
+          }
+        }
 
         return { user: newUser, student };
       },
@@ -2146,6 +2174,22 @@ export class AuthService {
             classId: user.student.classId,
             examTarget: user.student.examTarget?.name,
             examTargetId: user.student.examTargetId,
+            jee: user.student.jee,
+            cet: user.student.cet,
+            neet: user.student.neet,
+            targets: Array.from(
+              new Set([
+                ...(user.student.examTarget?.name ? [user.student.examTarget.name] : []),
+                ...(user.student.studentExamTargets?.map((st: any) => st.examTarget?.name).filter(Boolean) || []),
+              ]),
+            ),
+            studentExamTargets:
+              user.student.studentExamTargets?.map((st: any) => ({
+                id: st.id,
+                examTargetId: st.examTargetId,
+                name: st.examTarget?.name,
+                isPrimary: st.isPrimary,
+              })) || [],
             preferredLanguage: user.student.preferredLanguage?.name,
             preferredLanguageId: user.student.preferredLanguageId,
             stateId: user.student.stateId,
